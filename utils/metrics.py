@@ -110,7 +110,7 @@ def compute_fid(pred_dir: str, gt_dir: str, device: str = "cpu") -> float:
         FID score (float, lower is better)
     """
     try:
-        from pytorch_fid import fid_score
+        from pytorch_fid import fid_score  # type: ignore[import]
         # pytorch-fid requires a torch.device object, not a plain string
         fid_device = torch.device(device)
         fid = fid_score.calculate_fid_given_paths(
