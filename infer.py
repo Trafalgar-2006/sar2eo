@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 import torch
-from torch.cuda.amp import autocast
+import torch.amp
 
 # ---------------------------------------------------------------------------
 # Default model parameters (used if config.yaml is unavailable)
@@ -46,7 +46,7 @@ DEFAULT_OUT_CHANNELS  = 3
 
 def load_model(weights_path: str,
                config_path: str,
-               device: torch.device) -> "UNetGenerator":
+               device: torch.device) -> torch.nn.Module:
     """
     Load the UNet generator from a checkpoint.
     Falls back to default params if config.yaml is not found.
@@ -74,7 +74,7 @@ def load_model(weights_path: str,
         base_ch      = base_ch,
     ).to(device)
 
-    ckpt = torch.load(weights_path, map_location=device)
+    ckpt = torch.load(weights_path, map_location=device, weights_only=False)
 
     # Handle different checkpoint formats
     if "G" in ckpt:
@@ -101,8 +101,9 @@ def load_sar_image(path: str) -> torch.Tensor:
     # Verify dimensions
     if img.size != (256, 256):
         # Resize if necessary (should not happen with correctly prepared data)
+        orig_size = img.size
         img = img.resize((256, 256), Image.BILINEAR)
-        print(f"[WARNING] Resized {path} from {img.size} to (256, 256)")
+        print(f"[WARNING] Resized {path} from {orig_size} to (256, 256)")
 
     arr = np.array(img, dtype=np.float32)   # [H, W], range [0, 255]
     arr = arr / 255.0                        # → [0, 1]
@@ -183,7 +184,7 @@ def run_inference(
 
         # Generate EO
         with torch.no_grad():
-            with autocast(enabled=use_amp):
+            with torch.amp.autocast(device_type="cuda", enabled=use_amp):
                 fake_eo = G(batch)   # [B, 3, 256, 256]
 
         # Save each output with same filename as input

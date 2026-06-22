@@ -137,6 +137,10 @@ def save_triplets(
     os.makedirs(output_dir, exist_ok=True)
     n = min(len(sar_images), max_triplets)
 
+    if n == 0:
+        print("[Visualize] No images to save.")
+        return
+
     # ---- Individual triplets ---------------------------------------------
     for i in range(n):
         sar_rgb  = _tensor_to_rgb(sar_images[i])
@@ -163,8 +167,8 @@ def save_triplets(
 
     # ---- Summary grid (all triplets in one figure) -----------------------
     fig, axes = plt.subplots(n, 3, figsize=(12, 4 * n))
-    if n == 1:
-        axes = [axes]
+    # Normalize to always be shape (n, 3) regardless of n
+    axes = np.array(axes).reshape(n, 3)
 
     col_titles = ["SAR Input (VV)", "Generated EO", "Ground Truth EO"]
     for col_idx, title in enumerate(col_titles):

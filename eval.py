@@ -88,7 +88,7 @@ def run_inference_to_dir(
         base_ch      = model_cfg["base_channels"],
     ).to(device)
 
-    ckpt = torch.load(weights_path, map_location=device)
+    ckpt = torch.load(weights_path, map_location=device, weights_only=False)
     G.load_state_dict(ckpt["G"])
     G.eval()
     print(f"[Eval] Loaded weights from {weights_path}")
@@ -98,7 +98,9 @@ def run_inference_to_dir(
 
     os.makedirs(pred_dir, exist_ok=True)
     os.makedirs(gt_dir,   exist_ok=True)
+    pred_dir_path = Path(pred_dir)
 
+    n_saved = 0
     with torch.no_grad():
         for i, batch in enumerate(tqdm(loader, desc=f"Running inference ({split})")):
             sar     = batch["sar"].to(device)
@@ -118,8 +120,10 @@ def run_inference_to_dir(
             gt_img = gt_img.clamp(0, 1)
             gt_img = (gt_img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             Image.fromarray(gt_img).save(os.path.join(gt_dir, f"{i:05d}.png"))
+            n_saved += 1
 
-    print(f"[Eval] Saved {i+1} prediction/GT pairs.")
+    n_saved = sum(1 for _ in pred_dir_path.glob("*.png")) if hasattr(pred_dir_path, 'glob') else i+1
+    print(f"[Eval] Saved prediction/GT pairs.")
 
 
 # ---------------------------------------------------------------------------

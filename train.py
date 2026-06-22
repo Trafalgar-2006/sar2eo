@@ -29,7 +29,7 @@ from typing import Dict, List
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast, GradScaler
+import torch.amp
 
 from data.dataloader import get_dataloaders
 from models.generator import UNetGenerator
@@ -227,9 +227,10 @@ def train(cfg: dict):
     sched_D = torch.optim.lr_scheduler.LambdaLR(optim_D, lr_lambda=lr_lambda) if optim_D else None
 
     # ---- Mixed precision -------------------------------------------------
-    use_amp = train_cfg.get("mixed_precision", True) and device.type == "cuda"
-    scaler_G = GradScaler() if use_amp else None
-    scaler_D = GradScaler() if (use_amp and D is not None) else None
+    use_amp  = train_cfg.get("mixed_precision", True) and device.type == "cuda"
+    amp_device = "cuda"  # device type string for torch.amp API
+    scaler_G = torch.amp.GradScaler(device=amp_device) if use_amp else None
+    scaler_D = torch.amp.GradScaler(device=amp_device) if (use_amp and D is not None) else None
 
     # ---- Training state --------------------------------------------------
     n_epochs     = train_cfg["epochs"]
@@ -263,7 +264,7 @@ def train(cfg: dict):
             # ------ Update Discriminator --------------------------------
             if D is not None and optim_D is not None:
                 optim_D.zero_grad()
-                with autocast(enabled=use_amp):
+                with torch.amp.autocast(device_type="cuda", enabled=use_amp):
                     fake_eo  = G(sar).detach()
                     loss_D   = compute_discriminator_loss(D, sar, real_eo, fake_eo, loss_fns["gan"])
 
@@ -279,7 +280,7 @@ def train(cfg: dict):
 
             # ------ Update Generator ------------------------------------
             optim_G.zero_grad()
-            with autocast(enabled=use_amp):
+            with torch.amp.autocast(device_type="cuda", enabled=use_amp):
                 fake_eo  = G(sar)
                 g_losses = compute_generator_loss(
                     G, D, sar, real_eo, fake_eo,
@@ -329,7 +330,7 @@ def train(cfg: dict):
                 for val_batch in val_loader:
                     v_sar    = val_batch["sar"].to(device)
                     v_real   = val_batch["eo"].to(device)
-                    with autocast(enabled=use_amp):
+                    with torch.amp.autocast(device_type="cuda", enabled=use_amp):
                         v_fake = G(v_sar)
                     val_l1 = loss_fns["l1"](v_fake, v_real).item()
                     val_losses.append(val_l1)
