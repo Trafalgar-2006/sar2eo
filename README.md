@@ -5,6 +5,27 @@
 
 ---
 
+## Repository File Map
+
+| File | Purpose |
+|---|---|
+| `model.py` | Root-level shim — re-exports `UNetGenerator`, `PatchGANDiscriminator`, all losses |
+| `dataloader.py` | Root-level shim — re-exports `SARtoEODataset`, `get_dataloaders` |
+| `train.py` | Training loop with mixed precision, LR decay, checkpointing |
+| `eval.py` | Evaluation — runs inference + computes LPIPS/FID/SSIM/PSNR |
+| `infer.py` | Inference per GalaxEye I/O contract |
+| `config.yaml` | All hyperparameters (LR, batch, epochs, losses, seed, augmentation) |
+| `requirements.txt` | Pinned dependencies |
+| `models/generator.py` | U-Net generator (8 encoder + 8 decoder + skip connections) |
+| `models/discriminator.py` | 70×70 PatchGAN discriminator |
+| `models/losses.py` | L1, GAN, FFT frequency, VGG perceptual losses |
+| `data/dataloader.py` | Full dataset implementation (SEN1-2 + Kaggle terrain-split) |
+| `utils/metrics.py` | LPIPS, FID, SSIM, PSNR computation |
+| `utils/visualize.py` | Loss curve plots + SAR/EO/GT triplet grids |
+| `kaggle_train.ipynb` | End-to-end training notebook for Kaggle T4 GPU |
+
+---
+
 ## Approach
 
 This project implements a **Pix2Pix-based conditional GAN** with a non-standard loss stack designed to directly target the primary evaluation metrics (LPIPS ↓, FID ↓):
@@ -171,9 +192,11 @@ Computes and saves to `outputs/metrics_{ablation}_{split}.csv`:
 
 ## Model Weights
 
-Pre-trained weights (Config D — full model, trained on Kaggle T4):
+Pre-trained weights (Config D — full model, trained on Kaggle T4 × 2):
 
-> **[Download from Google Drive / HuggingFace Hub]** ← link added after training
+> **[Download weights — link added after training run]**
+
+> ⚠️ This link is also in the Google Form submission. Weights are NOT in the ZIP.
 
 Place checkpoint at: `checkpoints/full/best.pth`
 
@@ -226,3 +249,32 @@ CVPR 2018. https://arxiv.org/abs/1801.03924
 Heusel et al. (2017). GANs Trained by a Two Time-Scale Update Rule Converge to a 
 Local Nash Equilibrium. NeurIPS 2017. https://arxiv.org/abs/1706.08500
 ```
+
+---
+
+## Time & Resource Log
+
+| Phase | Time (approx) |
+|---|---|
+| Data exploration & literature survey | ~3 hrs |
+| Architecture design & implementation | ~5 hrs |
+| Debugging & testing (local) | ~2 hrs |
+| Training (Kaggle T4) | ~TBD hrs |
+| Evaluation & report writing | ~TBD hrs |
+| **Total** | **~TBD hrs** |
+
+**Hardware:**
+- Local: Intel i5 12th Gen, NVIDIA RTX 3050 (4 GB VRAM) — used for smoke tests only
+- Training: Kaggle T4 GPU (16 GB VRAM), PyTorch 2.1.0 + CUDA 11.8
+- Mixed precision (fp16) via `torch.amp` — ~2× VRAM reduction
+
+**Training time per epoch:** ~TBD min (100 pairs smoke: ~30 s)  
+**Total wall-clock training time:** ~TBD hrs
+
+---
+
+## Submission
+
+ZIP file submitted: `FirstName_LastName_GalaxEye.zip`  
+Contains: Technical report PDF, loss curves, qualitative triplet images, time log.  
+**Weights NOT in ZIP** — submitted via public link above.
