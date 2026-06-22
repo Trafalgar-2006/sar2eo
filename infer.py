@@ -160,7 +160,7 @@ def run_inference(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[Infer] Found {len(sar_files)} SAR patches in {input_dir}")
-    print(f"[Infer] Outputs → {output_dir}")
+    print(f"[Infer] Outputs -> {output_dir}")
 
     # ---- Load model -------------------------------------------------------
     print(f"[Infer] Loading model from {weights_path}...")
@@ -197,7 +197,7 @@ def run_inference(
         if (i // batch_size) % 10 == 0:
             print(f"  Processed {n_processed}/{len(sar_files)} patches...")
 
-    print(f"\n[Infer] Done. Generated {n_processed} EO images → {output_dir}")
+    print(f"\n[Infer] Done. Generated {n_processed} EO images -> {output_dir}")
 
     # ---- VRAM report (for reproducibility log) ---------------------------
     if device.type == "cuda":

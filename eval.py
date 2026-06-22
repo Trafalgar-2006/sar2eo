@@ -182,7 +182,7 @@ def evaluate_dirs(pred_dir: str, gt_dir: str,
         writer.writerow(["split", "lpips", "fid", "ssim", "psnr"])
         writer.writerow([split, metrics["lpips"], metrics["fid"],
                          metrics["ssim"], metrics["psnr"]])
-    print(f"[Eval] Results saved → {output_path}")
+    print(f"[Eval] Results saved -> {output_path}")
 
     return metrics
 

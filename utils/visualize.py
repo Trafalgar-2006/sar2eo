@@ -96,7 +96,7 @@ def plot_loss_curves(
     plot_path = os.path.join(output_dir, f"loss_curve_{ablation_name}.png")
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"[Visualize] Loss curve saved → {plot_path}")
+    print(f"[Visualize] Loss curve saved -> {plot_path}")
 
     # ---- CSV (raw values) ------------------------------------------------
     csv_path = os.path.join(output_dir, f"losses_{ablation_name}.csv")
@@ -106,7 +106,7 @@ def plot_loss_curves(
         for i, epoch in enumerate(epochs):
             row = [epoch] + [loss_history[k][i] for k in loss_history]
             writer.writerow(row)
-    print(f"[Visualize] Loss CSV saved → {csv_path}")
+    print(f"[Visualize] Loss CSV saved -> {csv_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +192,8 @@ def save_triplets(
     grid_path = os.path.join(output_dir, f"{prefix}_grid.png")
     plt.savefig(grid_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"[Visualize] {n} triplets saved → {output_dir}/")
-    print(f"[Visualize] Summary grid → {grid_path}")
+    print(f"[Visualize] {n} triplets saved -> {output_dir}/")
+    print(f"[Visualize] Summary grid -> {grid_path}")
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ training:
   beta1: 0.5                 # Adam beta1 — standard for GANs
   beta2: 0.999
   lr_decay_start_epoch: 50   # Linear LR decay from this epoch onward
-  mixed_precision: true      # fp16 via torch.cuda.amp — effectively doubles VRAM
+  mixed_precision: true      # fp16 via torch.amp — effectively doubles VRAM headroom
   save_freq: 10              # Save checkpoint every N epochs
   val_freq: 5                # Run validation every N epochs
   seed: 42

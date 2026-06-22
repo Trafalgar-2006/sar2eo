@@ -352,7 +352,7 @@ def train(cfg: dict):
                 torch.save({"epoch": epoch, "G": G.state_dict(),
                             "D": D.state_dict() if D else None,
                             "val_loss": val_loss}, best_ckpt)
-                print(f"  [Val] Best checkpoint saved → {best_ckpt}")
+                print(f"  [Val] Best checkpoint saved -> {best_ckpt}")
 
         # ---- Periodic checkpoint save ----------------------------------
         if epoch % save_freq == 0:
@@ -362,14 +362,14 @@ def train(cfg: dict):
                         "optim_G": optim_G.state_dict(),
                         "optim_D": optim_D.state_dict() if optim_D else None,
                         "history": history}, ckpt_path)
-            print(f"  [Ckpt] Saved → {ckpt_path}")
+            print(f"  [Ckpt] Saved -> {ckpt_path}")
 
     # ---- Final checkpoint ------------------------------------------------
     final_ckpt = os.path.join(ckpt_dir, "final.pth")
     torch.save({"epoch": n_epochs, "G": G.state_dict(),
                 "D": D.state_dict() if D else None,
                 "history": history}, final_ckpt)
-    print(f"\n[Done] Final checkpoint → {final_ckpt}")
+    print(f"\n[Done] Final checkpoint -> {final_ckpt}")
     print(f"[Done] Total training time: {(time.time()-t_start)/60:.1f} min")
 
     # ---- Save loss curves ------------------------------------------------
