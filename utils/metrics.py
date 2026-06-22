@@ -18,7 +18,7 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 from skimage.metrics import structural_similarity as sk_ssim
 from skimage.metrics import peak_signal_noise_ratio as sk_psnr
@@ -41,9 +41,6 @@ def _to_numpy_uint8(tensor: torch.Tensor) -> np.ndarray:
     return img                         # [H, W, C], uint8
 
 
-def _to_01_tensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert [B, C, H, W] from [-1, 1] to [0, 1]."""
-    return (tensor.clamp(-1, 1) + 1.0) / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +66,15 @@ def _psnr_single(pred: torch.Tensor, target: torch.Tensor) -> float:
 # ---------------------------------------------------------------------------
 
 _lpips_fn = None
+_lpips_device = None   # track which device the singleton is on
 
 def _get_lpips(device: str) -> lpips.LPIPS:
-    global _lpips_fn
-    if _lpips_fn is None:
+    global _lpips_fn, _lpips_device
+    # Rebuild if not yet created OR if device changed (e.g. CPU→GPU)
+    if _lpips_fn is None or _lpips_device != device:
         _lpips_fn = lpips.LPIPS(net="alex").to(device)
         _lpips_fn.eval()
+        _lpips_device = device
     return _lpips_fn
 
 
@@ -111,15 +111,20 @@ def compute_fid(pred_dir: str, gt_dir: str, device: str = "cpu") -> float:
     """
     try:
         from pytorch_fid import fid_score
+        # pytorch-fid requires a torch.device object, not a plain string
+        fid_device = torch.device(device)
         fid = fid_score.calculate_fid_given_paths(
             [pred_dir, gt_dir],
             batch_size=50,
-            device=device,
+            device=fid_device,
             dims=2048,
         )
         return fid
     except ImportError:
         print("[WARNING] pytorch-fid not installed. FID not computed.")
+        return float("nan")
+    except Exception as e:
+        print(f"[WARNING] FID computation failed: {e}")
         return float("nan")
 
 
