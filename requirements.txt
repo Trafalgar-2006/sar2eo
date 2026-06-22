@@ -1,0 +1,23 @@
+# GalaxEye SAR-to-EO — Dependencies (pinned for reproducibility)
+
+# Core deep learning
+torch==2.1.0
+torchvision==0.16.0
+
+# Data & numerics
+numpy==1.26.0
+Pillow==10.0.1
+scikit-image==0.22.0
+
+# Config & utilities
+pyyaml==6.0.1
+tqdm==4.66.1
+pandas==2.1.1
+matplotlib==3.8.0
+
+# Evaluation metrics
+lpips==0.1.4
+pytorch-fid==0.3.0
+
+# Optional: for downloading SEN1-2 via rsync (not needed on Kaggle)
+# Install separately if needed: pip install rsync

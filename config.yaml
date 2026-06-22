@@ -1,0 +1,66 @@
+# ============================================================
+# GalaxEye SAR-to-EO Image Translation — Configuration File
+# All hyperparameters logged here for full reproducibility.
+# ============================================================
+
+model:
+  base_channels: 64          # Generator base channels (fits 4GB VRAM @ batch=4 fp16)
+  input_channels: 1          # SAR: single-channel VV
+  output_channels: 3         # EO: RGB
+  n_layers_D: 3              # PatchGAN discriminator depth
+
+training:
+  epochs: 100
+  batch_size: 4              # Reduce to 2 if OOM on <4GB VRAM
+  lr_generator: 0.0002
+  lr_discriminator: 0.0002
+  beta1: 0.5                 # Adam beta1 — standard for GANs
+  beta2: 0.999
+  lr_decay_start_epoch: 50   # Linear LR decay from this epoch onward
+  mixed_precision: true      # fp16 via torch.cuda.amp — effectively doubles VRAM
+  save_freq: 10              # Save checkpoint every N epochs
+  val_freq: 5                # Run validation every N epochs
+  seed: 42
+
+loss:
+  lambda_l1: 100.0           # L1 pixel loss weight
+  lambda_fft: 10.0           # FFT frequency loss weight (SAR speckle motivation)
+  lambda_vgg: 10.0           # VGG perceptual loss weight (directly targets LPIPS)
+  lambda_adv: 1.0            # Adversarial loss weight
+
+# Ablation control — change this to run each ablation config:
+#   "l1_only"    → Config A (baseline, no GAN)
+#   "l1_adv"     → Config B (+ adversarial)
+#   "l1_adv_fft" → Config C (+ FFT frequency loss)
+#   "full"       → Config D — MAIN MODEL (+ VGG perceptual)
+active_ablation: "full"
+
+data:
+  # Dataset type: "sen12" (SEN1-2 from mediaTUM) or "kaggle" (terrain-split)
+  dataset_type: "kaggle"
+
+  # --- SEN1-2 paths (if dataset_type = "sen12") ---
+  sen12_root: "./data/SEN1-2"
+  train_seasons: ["spring", "summer", "fall"]
+  val_seasons: ["winter"]
+  test_seasons: ["winter"]
+
+  # --- Kaggle dataset paths (if dataset_type = "kaggle") ---
+  kaggle_root: "./data/sentinel12"
+  train_terrain: ["barren", "grassland", "agricultural"]
+  val_terrain: ["urban"]
+  test_terrain: ["urban"]
+
+  image_size: 256
+  subset_size: 20000         # Max pairs to use from training set (null = use all)
+  num_workers: 4             # DataLoader workers
+
+augmentation:
+  horizontal_flip: true      # p=0.5
+  vertical_flip: true        # p=0.5
+  rotation_90: true          # p=0.5 (rotate by 0/90/180/270)
+
+paths:
+  checkpoint_dir: "./checkpoints"
+  output_dir: "./outputs"
+  log_dir: "./logs"

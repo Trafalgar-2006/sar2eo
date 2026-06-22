@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dataset (large files — stored separately)
+data/SEN1-2/
+data/sentinel12/
+data/*.zip
+data/*.tar
+data/*.tgz
+
+# Checkpoints (large — shared via public link)
+checkpoints/
+
+# Generated outputs (except committed samples)
+outputs/eval_preds*/
+outputs/eval_gt*/
+
+# Logs
+logs/
+
+# Smoke test config (auto-generated)
+config_smoke.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
