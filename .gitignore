@@ -29,6 +29,11 @@ checkpoints/
 # Generated outputs (except committed samples)
 outputs/eval_preds*/
 outputs/eval_gt*/
+outputs/test_audit/
+
+# Dev/audit scripts
+audit_check.py
+config_smoke.yaml
 
 # Logs
 logs/
