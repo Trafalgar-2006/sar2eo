@@ -47,7 +47,7 @@ data:
 
   # --- Kaggle dataset paths (if dataset_type = "kaggle") ---
   kaggle_root: "./data/sentinel12"
-  train_terrain: ["barren", "grassland", "agricultural"]
+  train_terrain: ["agri", "barrenland", "grassland"]
   val_terrain: ["urban"]
   test_terrain: ["urban"]
 
