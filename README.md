@@ -60,7 +60,7 @@ This project implements a **Pix2Pix-based conditional GAN** with a non-standard 
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/sar2eo.git
+git clone https://github.com/Trafalgar-2006/sar2eo.git
 cd sar2eo
 
 # Create virtual environment
@@ -100,11 +100,11 @@ data/SEN1-2/
 Download from [Kaggle](https://www.kaggle.com/datasets/requiemonk/sentinel12-image-pairs-segregated-by-terrain) and place:
 ```
 data/sentinel12/
-├── barren/
+├── agri/
 │   ├── s1/   ← SAR PNGs
 │   └── s2/   ← EO PNGs
+├── barrenland/
 ├── grassland/
-├── agricultural/
 └── urban/
 ```
 
@@ -112,7 +112,7 @@ Update `config.yaml` → `data.dataset_type` to `"sen12"` or `"kaggle"` accordin
 
 **Train/Val/Test Split:**
 - **SEN1-2**: Split by season — spring+summer+fall=train, winter=val/test (prevents adjacent-patch leakage)
-- **Kaggle**: Split by terrain — barren+grassland+agricultural=train, urban=val/test (hardest terrain class held out)
+- **Kaggle**: Split by terrain — agri+barrenland+grassland=train, urban=val/test (hardest terrain class held out)
 
 ---
 
@@ -259,7 +259,7 @@ Local Nash Equilibrium. NeurIPS 2017. https://arxiv.org/abs/1706.08500
 | Data exploration & literature survey | ~3 hrs |
 | Architecture design & implementation | ~5 hrs |
 | Debugging & testing (local) | ~2 hrs |
-| Training (Kaggle T4) | ~TBD hrs |
+| Training (Kaggle T4) | Config A: 3.7 hrs / Config B–D: ~TBD hrs |
 | Evaluation & report writing | ~TBD hrs |
 | **Total** | **~TBD hrs** |
 
