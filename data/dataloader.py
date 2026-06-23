@@ -135,7 +135,15 @@ def _discover_kaggle_pairs(root: str,
     Paired by matching filename.
     """
     pairs: List[Tuple[str, str]] = []
+    if root is None:
+        raise ValueError(
+            "kaggle_root is None — the Sentinel dataset is not mounted.\n"
+            "In /kaggle/input, only these folders exist: "
+            + str(list(Path("/kaggle/input").iterdir()) if Path("/kaggle/input").exists() else [])
+            + "\nStop the session, add the Sentinel-1&2 dataset via '+ Add Input', then Run All."
+        )
     root_path = Path(root)
+
 
     for terrain in terrains:
         terrain_dir = root_path / terrain
