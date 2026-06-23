@@ -124,17 +124,43 @@ def _discover_sen12_pairs(root: str,
 # Kaggle Sentinel-1&2 pair discovery
 # ---------------------------------------------------------------------------
 
+def _find_s1_s2_dir(terrain_dir: Path) -> Optional[Tuple[Path, Path]]:
+    """Return (s1_dir, s2_dir) for a terrain directory, trying multiple naming conventions."""
+    for s1_name, s2_name in [("s1", "s2"), ("SAR", "Optical"), ("sar", "optical"),
+                              ("S1", "S2"), ("sen1", "sen2")]:
+        s1 = terrain_dir / s1_name
+        s2 = terrain_dir / s2_name
+        if s1.exists() and s2.exists():
+            return s1, s2
+    return None
+
+
+def _collect_pairs_from_dir(terrain_dir: Path) -> List[Tuple[str, str]]:
+    """Collect (sar, eo) pairs from a single terrain directory."""
+    result = _find_s1_s2_dir(terrain_dir)
+    if result is None:
+        return []
+    s1_dir, s2_dir = result
+    pairs = []
+    for sar_path in sorted(s1_dir.glob("*.png")):
+        eo_path = s2_dir / sar_path.name
+        if eo_path.exists():
+            pairs.append((str(sar_path), str(eo_path)))
+    return pairs
+
+
 def _discover_kaggle_pairs(root: str,
                             terrains: List[str]) -> List[Tuple[str, str]]:
     """
     Walk root directory, collect (sar_path, eo_path) pairs for the given terrain classes.
 
-    Kaggle layout:
-      root/{terrain}/s1/*.png  (SAR)
-      root/{terrain}/s2/*.png  (EO)
-    Paired by matching filename.
+    Supports multiple layouts:
+      root/{terrain}/s1/*.png + root/{terrain}/s2/*.png  (standard)
+      root/{terrain}/SAR/*.png + root/{terrain}/Optical/*.png  (alternate)
+
+    If configured terrain names don't match any directory, falls back to
+    scanning ALL subdirectories that contain valid s1/s2 pairs.
     """
-    pairs: List[Tuple[str, str]] = []
     if root is None:
         raise ValueError(
             "kaggle_root is None — the Sentinel dataset is not mounted.\n"
@@ -143,36 +169,34 @@ def _discover_kaggle_pairs(root: str,
             + "\nStop the session, add the Sentinel-1&2 dataset via '+ Add Input', then Run All."
         )
     root_path = Path(root)
+    if not root_path.exists():
+        raise FileNotFoundError(f"kaggle_root does not exist: {root}")
 
+    pairs: List[Tuple[str, str]] = []
 
+    # ---- Step 1: try configured terrain names (exact + case-insensitive) ----
     for terrain in terrains:
         terrain_dir = root_path / terrain
         if not terrain_dir.exists():
-            # Try case-insensitive match
             matches = [d for d in root_path.iterdir()
                        if d.is_dir() and d.name.lower() == terrain.lower()]
             if not matches:
                 print(f"[WARNING] Terrain dir '{terrain}' not found in {root}")
                 continue
             terrain_dir = matches[0]
+        pairs.extend(_collect_pairs_from_dir(terrain_dir))
 
-        s1_dir = terrain_dir / "s1"
-        s2_dir = terrain_dir / "s2"
-
-        if not s1_dir.exists() or not s2_dir.exists():
-            # Some Kaggle datasets have 'SAR' / 'Optical' naming
-            alt_s1 = terrain_dir / "SAR"
-            alt_s2 = terrain_dir / "Optical"
-            if alt_s1.exists() and alt_s2.exists():
-                s1_dir, s2_dir = alt_s1, alt_s2
-            else:
-                print(f"[WARNING] Could not find s1/s2 dirs in {terrain_dir}")
-                continue
-
-        for sar_path in sorted(s1_dir.glob("*.png")):
-            eo_path = s2_dir / sar_path.name
-            if eo_path.exists():
-                pairs.append((str(sar_path), str(eo_path)))
+    # ---- Step 2: fallback — scan ALL subdirs if no pairs found ---------------
+    if not pairs:
+        print(f"[INFO] Configured terrain names {terrains} not found. "
+              f"Auto-scanning all subdirectories of {root}...")
+        all_dirs = sorted([d for d in root_path.iterdir() if d.is_dir()])
+        print(f"[INFO] Found subdirs: {[d.name for d in all_dirs]}")
+        for terrain_dir in all_dirs:
+            found = _collect_pairs_from_dir(terrain_dir)
+            if found:
+                print(f"[INFO] Found {len(found)} pairs in '{terrain_dir.name}'")
+                pairs.extend(found)
 
     return pairs
 
