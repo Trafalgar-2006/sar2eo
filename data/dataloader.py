@@ -127,86 +127,113 @@ def _discover_sen12_pairs(root: str,
 def _discover_kaggle_pairs(root: str,
                             terrains: List[str]) -> List[Tuple[str, str]]:
     """
-    Robustly discover (sar_path, eo_path) pairs anywhere inside root.
+    Robustly discover (sar_path, eo_path) pairs inside root.
 
-    Uses deep recursive scan: finds all images, classifies as s1/s2 by
-    directory name components, pairs by matching filename.
-    Works regardless of nesting depth or exact folder names.
+    Strategy per terrain directory:
+      1. Find s1/s2 subdirs (tries many naming conventions)
+      2. Glob all image files in each
+      3. Pair by exact filename match first; fall back to sorted-index pairing
     """
     if root is None:
         raise ValueError(
             "kaggle_root is None - dataset not mounted.\n"
-            "In /kaggle/input: "
+            "Available in /kaggle/input: "
             + str(list(Path("/kaggle/input").iterdir()) if Path("/kaggle/input").exists() else [])
         )
     root_path = Path(root)
     if not root_path.exists():
         raise FileNotFoundError(f"kaggle_root does not exist: {root}")
 
-    IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+    IMAGE_EXTS = ("*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg")
 
-    all_images: List[Path] = []
-    for ext in IMAGE_EXTS:
-        all_images.extend(root_path.rglob(f"*{ext}"))
+    # Helper: find s1 and s2 subdirectories inside a terrain dir
+    S1_NAMES = ["s1", "sar", "sen1", "S1", "SAR", "sentinel1"]
+    S2_NAMES = ["s2", "optical", "sen2", "S2", "Optical", "sentinel2"]
 
-    if not all_images:
-        print(f"[WARNING] No image files found under {root}")
-        return []
+    def find_s1_s2(terrain_dir: Path):
+        for s1n in S1_NAMES:
+            for s2n in S2_NAMES:
+                s1d = terrain_dir / s1n
+                s2d = terrain_dir / s2n
+                if s1d.is_dir() and s2d.is_dir():
+                    return s1d, s2d
+        return None, None
 
-    print(f"[INFO] Found {len(all_images)} total image files")
+    # Helper: glob all image files
+    def glob_images(directory: Path) -> List[Path]:
+        files = []
+        for ext in IMAGE_EXTS:
+            files.extend(directory.glob(ext))
+        return sorted(files)
 
-    # Classify by directory name components
-    s1_kw = {"s1", "sar", "sen1", "sentinel1", "sentinel-1"}
-    s2_kw = {"s2", "optical", "sen2", "sentinel2", "sentinel-2"}
+    # Find all terrain directories (case-insensitive match)
+    all_subdirs = sorted([d for d in root_path.iterdir() if d.is_dir()])
+    print(f"[INFO] Subdirs of root: {[d.name for d in all_subdirs]}")
 
-    s1_files: List[Path] = []
-    s2_files: List[Path] = []
-    for img in all_images:
-        parts_lower = {p.lower() for p in img.parts}
-        if parts_lower & s1_kw:
-            s1_files.append(img)
-        elif parts_lower & s2_kw:
-            s2_files.append(img)
-
-    print(f"[INFO] SAR files: {len(s1_files)} | EO files: {len(s2_files)}")
-
-    if not s1_files or not s2_files:
-        print(f"[WARNING] Could not classify. Sample: {[str(p) for p in all_images[:3]]}")
-        return []
-
-    # Build lookup from s2 files by basename
-    s2_by_name: dict = {}
-    for f in s2_files:
-        s2_by_name.setdefault(f.name, []).append(f)
-
-    # Terrain filter set
-    terrain_set = {t.lower() for t in terrains} if terrains else None
+    # If specific terrains requested, filter; otherwise use all
+    if terrains:
+        terrain_dirs = []
+        terrain_lower = {t.lower() for t in terrains}
+        for d in all_subdirs:
+            if d.name.lower() in terrain_lower:
+                terrain_dirs.append(d)
+        if not terrain_dirs:
+            print(f"[INFO] Requested terrains {terrains} not found among {[d.name for d in all_subdirs]}")
+            print(f"[INFO] Falling back to ALL subdirs")
+            terrain_dirs = all_subdirs
+    else:
+        terrain_dirs = all_subdirs
 
     pairs: List[Tuple[str, str]] = []
-    for s1 in s1_files:
-        if terrain_set is not None:
-            parts_lower = {p.lower() for p in s1.parts}
-            if not (parts_lower & terrain_set):
-                continue
-        for s2 in s2_by_name.get(s1.name, []):
-            if terrain_set is not None:
-                s2_parts = {p.lower() for p in s2.parts}
-                if not (s2_parts & terrain_set):
-                    continue
-            pairs.append((str(s1), str(s2)))
-            break
+    for tdir in terrain_dirs:
+        s1_dir, s2_dir = find_s1_s2(tdir)
+        if s1_dir is None:
+            # Maybe terrain dir itself has no s1/s2 but has further nesting
+            # Try one level deeper
+            for sub in sorted(tdir.iterdir()):
+                if sub.is_dir():
+                    s1_dir, s2_dir = find_s1_s2(sub)
+                    if s1_dir is not None:
+                        break
+        if s1_dir is None:
+            print(f"[WARNING] No s1/s2 dirs in '{tdir.name}' — skipping")
+            continue
 
+        s1_files = glob_images(s1_dir)
+        s2_files = glob_images(s2_dir)
+        print(f"[INFO] {tdir.name}: s1={len(s1_files)} files, s2={len(s2_files)} files "
+              f"(dirs: {s1_dir.name}/{s2_dir.name})")
+
+        if not s1_files or not s2_files:
+            continue
+
+        # Debug: show sample filenames
+        if len(pairs) == 0:
+            print(f"[DEBUG] Sample s1 names: {[f.name for f in s1_files[:3]]}")
+            print(f"[DEBUG] Sample s2 names: {[f.name for f in s2_files[:3]]}")
+
+        # Try pairing by exact filename match
+        s2_name_map = {f.name: f for f in s2_files}
+        matched = []
+        for s1f in s1_files:
+            s2f = s2_name_map.get(s1f.name)
+            if s2f is not None:
+                matched.append((str(s1f), str(s2f)))
+
+        if matched:
+            pairs.extend(matched)
+        elif len(s1_files) == len(s2_files):
+            # Same count — pair by sorted index
+            print(f"[INFO] Names don't match in '{tdir.name}', pairing by sorted index")
+            for s1f, s2f in zip(s1_files, s2_files):
+                pairs.append((str(s1f), str(s2f)))
+        else:
+            print(f"[WARNING] Cannot pair in '{tdir.name}': "
+                  f"count mismatch s1={len(s1_files)} vs s2={len(s2_files)}")
+
+    print(f"[INFO] Total pairs found: {len(pairs)}")
     return pairs
 
-
-def _find_s1_s2_dir(terrain_dir: Path) -> Optional[Tuple[Path, Path]]:
-    """Return (s1_dir, s2_dir) for a terrain directory, trying multiple naming conventions."""
-    for s1_name, s2_name in [("s1", "s2"), ("SAR", "Optical"), ("sar", "optical"),
-                              ("S1", "S2"), ("sen1", "sen2")]:
-        s1 = terrain_dir / s1_name
-        s2 = terrain_dir / s2_name
-        if s1.exists() and s2.exists():
-            return s1, s2
 
 # ---------------------------------------------------------------------------
 # Main Dataset class
