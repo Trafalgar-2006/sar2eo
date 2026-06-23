@@ -247,10 +247,36 @@ def train(cfg: dict):
     }
 
     best_val_loss = float("inf")
+    start_epoch   = 1
+
+    # ---- Auto-resume from latest checkpoint ------------------------------
+    ckpt_files = sorted(Path(ckpt_dir).glob("epoch_*.pth")) if Path(ckpt_dir).exists() else []
+    if ckpt_files:
+        latest_ckpt = ckpt_files[-1]
+        print(f"\n[Resume] Found checkpoint: {latest_ckpt}")
+        ckpt = torch.load(latest_ckpt, map_location=device)
+        G.load_state_dict(ckpt["G"])
+        if D is not None and ckpt.get("D") is not None:
+            D.load_state_dict(ckpt["D"])
+        if ckpt.get("optim_G") is not None:
+            optim_G.load_state_dict(ckpt["optim_G"])
+        if D is not None and ckpt.get("optim_D") is not None:
+            optim_D.load_state_dict(ckpt["optim_D"])
+        if ckpt.get("history") is not None:
+            history = ckpt["history"]
+        start_epoch = ckpt["epoch"] + 1
+        print(f"[Resume] Resuming from epoch {start_epoch}/{n_epochs}")
+    else:
+        print(f"[Train] Starting from scratch (no checkpoints found in {ckpt_dir})")
+
+    if start_epoch > n_epochs:
+        print(f"[Done] Training already complete ({n_epochs} epochs). Nothing to do.")
+        return G
+
     t_start = time.time()
 
     # ---- Epoch loop ------------------------------------------------------
-    for epoch in range(1, n_epochs + 1):
+    for epoch in range(start_epoch, n_epochs + 1):
         G.train()
         if D is not None:
             D.train()
