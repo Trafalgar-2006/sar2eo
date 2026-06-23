@@ -142,11 +142,16 @@ def _collect_pairs_from_dir(terrain_dir: Path) -> List[Tuple[str, str]]:
         return []
     s1_dir, s2_dir = result
     pairs = []
-    for sar_path in sorted(s1_dir.glob("*.png")):
-        eo_path = s2_dir / sar_path.name
-        if eo_path.exists():
-            pairs.append((str(sar_path), str(eo_path)))
+    # Support .tif, .tiff, .png, .jpg — satellite datasets commonly use .tif
+    for ext in ("*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg"):
+        for sar_path in sorted(s1_dir.glob(ext)):
+            eo_path = s2_dir / sar_path.name
+            if eo_path.exists():
+                pairs.append((str(sar_path), str(eo_path)))
+        if pairs:
+            break  # Found matching pairs with this extension — stop searching
     return pairs
+
 
 
 def _discover_kaggle_pairs(root: str,
