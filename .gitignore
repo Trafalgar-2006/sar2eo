@@ -46,7 +46,8 @@ test_inputs/
 test_outputs/
 
 # Training artifacts (weights on Google Drive, not GitHub)
-training_outputs/
+training_outputs/*.pth
+*.zip
 
 # OS
 .DS_Store
