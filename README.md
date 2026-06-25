@@ -194,7 +194,7 @@ Computes and saves to `outputs/metrics_{ablation}_{split}.csv`:
 
 Pre-trained weights (Config D — full model, trained on Kaggle T4 × 2):
 
-> **[Download weights — link added after training run]**
+> **[Download weights (Google Drive ~218 MB)](https://drive.google.com/file/d/11Z9o2HNKBPfxBLpSTVbxkHFIMuoFBfBx/view?usp=sharing)**
 
 > ⚠️ This link is also in the Google Form submission. Weights are NOT in the ZIP.
 
@@ -204,24 +204,24 @@ Place checkpoint at: `checkpoints/full/best.pth`
 
 ## Results
 
-*(Updated after full training run)*
+All configs evaluated on the **urban held-out test split (4,000 pairs)**.
 
-### Validation Split
+### Ablation Study — Test Split
 
-| Config | LPIPS ↓ | FID ↓ | SSIM ↑ | PSNR ↑ |
-|---|---|---|---|---|
-| A: L1 only | — | — | — | — |
-| B: L1 + Adv | — | — | — | — |
-| C: L1 + Adv + FFT | — | — | — | — |
-| **D: Full (main)** | **—** | **—** | **—** | **—** |
+| Config | Loss Function | LPIPS ↓ | FID ↓ | SSIM ↑ | PSNR ↑ |
+|---|---|---|---|---|---|
+| A: L1 only | L1 | 0.894 | 333.0 | 0.128 | 12.91 |
+| B: L1 + Adv | L1 + Adversarial | 0.626 | 317.1 | 0.083 | 12.02 |
+| C: L1 + Adv + FFT | L1 + Adv + FFT | 0.627 | 329.1 | 0.078 | 11.65 |
+| **D: Full (main)** | **L1 + Adv + FFT + VGG** | **0.615** | **277.9** | 0.073 | 12.22 |
 
-### Test Split
+Key findings:
+- Adding adversarial loss (B vs A): LPIPS improves 30% (0.894 → 0.626), FID drops from 333 → 317
+- Adding VGG perceptual loss (D vs C): FID drops 15% (329 → 278) — largest single gain
+- Config D achieves best LPIPS and FID (primary metrics)
+- Classic pixel-perceptual tradeoff: L1-only (A) has highest SSIM/PSNR but worst LPIPS/FID
 
-| Config | LPIPS ↓ | FID ↓ | SSIM ↑ | PSNR ↑ |
-|---|---|---|---|---|
-| **D: Full (main)** | **—** | **—** | **—** | **—** |
-
-### Training Loss Curve
+### Training Loss Curve (Config D)
 
 ![Loss Curve](outputs/loss_curve_full.png)
 
@@ -258,18 +258,19 @@ Local Nash Equilibrium. NeurIPS 2017. https://arxiv.org/abs/1706.08500
 |---|---|
 | Data exploration & literature survey | ~3 hrs |
 | Architecture design & implementation | ~5 hrs |
-| Debugging & testing (local) | ~2 hrs |
-| Training (Kaggle T4) | Config A: 3.7 hrs / Config B–D: ~TBD hrs |
-| Evaluation & report writing | ~TBD hrs |
-| **Total** | **~TBD hrs** |
+| Debugging & Kaggle setup | ~3 hrs |
+| Training Config A — L1 only (100 epochs, T4) | ~1.6 hrs |
+| Training Config B — L1 + Adv (100 epochs, T4) | ~4 hrs |
+| Training Config C — L1 + Adv + FFT (100 epochs, T4) | ~4 hrs |
+| Training Config D — Full (100 epochs, T4) | ~7.5 hrs |
+| Evaluation & metric computation | ~2 hrs |
+| Report writing | ~4 hrs |
+| **Total** | **~34 hrs** |
 
 **Hardware:**
-- Local: Intel i5 12th Gen, NVIDIA RTX 3050 (4 GB VRAM) — used for smoke tests only
-- Training: Kaggle T4 GPU (16 GB VRAM), PyTorch 2.1.0 + CUDA 11.8
+- Training: Kaggle T4 GPU (16 GB VRAM), PyTorch 2.1.0 + CUDA 12.x
 - Mixed precision (fp16) via `torch.amp` — ~2× VRAM reduction
-
-**Training time per epoch:** ~TBD min (100 pairs smoke: ~30 s)  
-**Total wall-clock training time:** ~TBD hrs
+- Inference verified on CPU (local)
 
 ---
 
