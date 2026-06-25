@@ -41,6 +41,13 @@ logs/
 # Smoke test config (auto-generated)
 config_smoke.yaml
 
+# Local inference test data (not in repo)
+test_inputs/
+test_outputs/
+
+# Training artifacts (weights on Google Drive, not GitHub)
+training_outputs/
+
 # OS
 .DS_Store
 Thumbs.db
