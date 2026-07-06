@@ -22,48 +22,33 @@ print("✓ Repo ready")
 subprocess.run("pip install -q lpips pytorch-fid", shell=True, check=True)
 print("✓ Deps installed")
 
-# ── 3. Auto-discover dataset path ───────────────────────────────────────────
-INPUT_ROOT = "/kaggle/input"
+# ── 3. Auto-discover dataset path (searches ANY depth) ───────────────────────
+INPUT_ROOT  = "/kaggle/input"
 KAGGLE_DATA = None
-
-# Walk /kaggle/input and find the folder that contains agri/urban/grassland etc.
 TERRAIN_KEYS = {"agri", "urban", "grassland", "barrenland",
                 "forest", "water", "mountain"}
 
-for candidate in sorted(os.listdir(INPUT_ROOT)):
-    cpath = os.path.join(INPUT_ROOT, candidate)
-    if not os.path.isdir(cpath):
-        continue
-    subdirs = {d.lower() for d in os.listdir(cpath) if os.path.isdir(os.path.join(cpath, d))}
-    # Direct terrain folders inside this dataset dir
-    if subdirs & TERRAIN_KEYS:
-        KAGGLE_DATA = cpath
-        print(f"✓ Dataset found (direct): {KAGGLE_DATA}")
-        print(f"  Subdirs: {sorted(subdirs)}")
-        break
-    # One level deeper (dataset_name/dataset_name/agri/...)
-    for sub in os.listdir(cpath):
-        subpath = os.path.join(cpath, sub)
-        if not os.path.isdir(subpath):
-            continue
-        subsubdirs = {d.lower() for d in os.listdir(subpath)
-                      if os.path.isdir(os.path.join(subpath, d))}
-        if subsubdirs & TERRAIN_KEYS:
-            KAGGLE_DATA = subpath
-            print(f"✓ Dataset found (nested): {KAGGLE_DATA}")
-            print(f"  Subdirs: {sorted(subsubdirs)}")
-            break
-    if KAGGLE_DATA:
+print(f"Scanning {INPUT_ROOT} for terrain dataset...")
+for dirpath, dirnames, _ in os.walk(INPUT_ROOT):
+    subdirs = {d.lower() for d in dirnames}
+    if len(subdirs & TERRAIN_KEYS) >= 2:   # ≥2 terrain folders = it's the dataset root
+        KAGGLE_DATA = dirpath
+        print(f"✓ Dataset found at: {KAGGLE_DATA}")
+        print(f"  Terrain folders : {sorted(subdirs & TERRAIN_KEYS)}")
         break
 
 if KAGGLE_DATA is None:
-    print(f"\nAll /kaggle/input contents:")
-    for x in os.listdir(INPUT_ROOT):
-        p = os.path.join(INPUT_ROOT, x)
-        print(f"  {x}/  → {os.listdir(p)[:5]}")
+    # Print full tree so user knows exactly what's mounted
+    print("\n❌ Could not find terrain dataset. Full /kaggle/input tree:")
+    for dirpath, dirnames, _ in os.walk(INPUT_ROOT):
+        depth = dirpath.replace(INPUT_ROOT, "").count(os.sep)
+        if depth > 4:
+            continue
+        indent = "  " * depth
+        print(f"{indent}{os.path.basename(dirpath)}/")
     raise FileNotFoundError(
-        "Could not find terrain dataset. "
-        "Make sure 'Sentinel-1&2 Image Pairs' is added under Add Input."
+        "Terrain dataset not found. Go to Kaggle Notebook → Add Input → "
+        "search 'sentinel12-image-pairs-segregated-by-terrain' and add it."
     )
 
 # ── 4. Verify GPU ─────────────────────────────────────────────────────────
