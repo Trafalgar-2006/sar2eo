@@ -96,7 +96,8 @@ config = {
         "n_layers_D": 3,
     },
     "training": {
-        "epochs": 65,           # fits in 12hr Kaggle session (65 × ~9.5min ≈ 10.5hrs)
+        "epochs": 75,           # Session 1: epochs 1-75 (~12hrs on T4)
+                                # Session 2: resume for epochs 76-150
         "batch_size": 8,
         "lr_encoder": 2e-5,
         "lr_decoder": 2e-4,
@@ -108,8 +109,8 @@ config = {
         "gradient_clip_norm": 1.0,
         "ema_decay": 0.999,
         "mixed_precision": True,
-        "save_freq": 5,         # save every 5 epochs — more recovery points
-        "val_freq": 10,         # validate every 10 epochs — saves ~1hr vs val_freq=5
+        "save_freq": 5,         # checkpoint every 5 epochs — max 5 epochs of loss if timeout
+        "val_freq": 10,         # validate every 10 epochs — saves ~45min total vs val_freq=5
         "seed": 42,
     },
     "loss": {
@@ -178,9 +179,39 @@ torch.cuda.empty_cache()
 
 # ── 7. TRAIN ─────────────────────────────────────────────────────────────
 from train import train, load_config, make_dirs
+import glob
 
 cfg = load_config(CFG_PATH)
 make_dirs(cfg)
+
+# ── Auto-detect session number from existing checkpoints ─────────────────
+# Session 1: no checkpoints → train epochs 1-75
+# Session 2: epoch_075.pth found → set epochs=150, resume from 75
+CKPT_DIR = "/kaggle/working/checkpoints/full"
+existing = sorted(glob.glob(f"{CKPT_DIR}/epoch_*.pth"))
+
+if existing:
+    # Parse the latest saved epoch number
+    import re
+    latest_epoch = max(
+        int(re.search(r'epoch_(\d+)', f).group(1))
+        for f in existing
+        if re.search(r'epoch_(\d+)', f)
+    )
+    if latest_epoch >= 70:   # ≥70 means Session 1 is basically done
+        cfg["training"]["epochs"] = 150
+        print(f"🔄 SESSION 2 DETECTED — resuming from epoch {latest_epoch}, training to 150")
+    else:
+        print(f"🔄 Partial checkpoint found at epoch {latest_epoch} — resuming within Session 1")
+else:
+    print("🚀 SESSION 1 — training epochs 1–75")
+
+n_epochs_to_run = cfg["training"]["epochs"]
+print(f"   Config → epochs={n_epochs_to_run} | save_freq=5 | val_freq=10")
+print(f"   Estimated time: {n_epochs_to_run * 9.5 / 60:.1f} hrs on T4")
+if n_epochs_to_run == 75:
+    print(f"   ⚠️  IMPORTANT: Before the 12-hr mark, click 'Save Version' in Kaggle")
+    print(f"      This saves checkpoints/full/*.pth so Session 2 can resume from epoch 75")
 
 print("\n" + "="*60)
 print(" TRAINING — ResNet50-UNet + CBAM + Multi-Scale PatchGAN")
@@ -188,6 +219,17 @@ print("="*60 + "\n")
 
 G = train(cfg)
 print("\n✓ Training complete!")
+
+# ── Post-training: remind user to Save Version ────────────────────────────
+if n_epochs_to_run == 75:
+    print("\n" + "="*60)
+    print(" ✅  SESSION 1 COMPLETE — SAVE VERSION NOW")
+    print("="*60)
+    print("  1. Click 'Save Version' (top-right) to preserve outputs")
+    print("  2. This saves checkpoints/full/epoch_075.pth and all outputs")
+    print("  3. In Session 2: add this notebook's output as Input Dataset")
+    print("     The script will auto-detect it and train epochs 76–150")
+    print("="*60 + "\n")
 
 # ── 8. EVALUATE ──────────────────────────────────────────────────────────
 from eval import run_inference_to_dir, evaluate_dirs
@@ -209,3 +251,10 @@ print(f"  LPIPS ↓ : {metrics['lpips']:.4f}")
 print(f"  FID   ↓ : {metrics['fid']:.2f}")
 print("="*50)
 print("\n✓ Done! Download outputs from /kaggle/working/")
+
+# Files to download:
+print("\n📁 Key files to download:")
+print("  checkpoints/full/best.pth")
+print("  outputs/losses_full.csv")
+print("  outputs/metrics_test.csv")
+print("  logs/full_steps.jsonl")

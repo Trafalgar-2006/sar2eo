@@ -407,6 +407,7 @@ def train(cfg: dict):
         elapsed = (time.time() - t_start) / 60
         enc_lr  = optim_G.param_groups[0]["lr"]
         dec_lr  = optim_G.param_groups[1]["lr"]
+        eta_h   = (elapsed / epoch) * (n_epochs - epoch) / 60  # hours remaining
         print(
             f"[Epoch {epoch:03d}/{n_epochs}] "
             f"G={history['G_total'][-1]:.4f} "
@@ -417,8 +418,20 @@ def train(cfg: dict):
             f"ssim={history['G_ssim'][-1]:.3f}) "
             f"D={history['D_total'][-1]:.4f} "
             f"| lr_enc={enc_lr:.2e} lr_dec={dec_lr:.2e} "
-            f"| {elapsed:.1f}min"
+            f"| {elapsed:.1f}min elapsed | ETA {eta_h:.1f}h"
         )
+
+        # ---- INCREMENTAL CSV WRITE (every epoch — survives Kaggle timeout) --
+        # This ensures loss history is never lost even if training is interrupted.
+        import csv
+        csv_path = os.path.join(out_dir, f"losses_{ablation}.csv")
+        os.makedirs(out_dir, exist_ok=True)
+        with open(csv_path, "w", newline="") as csvf:
+            writer = csv.writer(csvf)
+            writer.writerow(["epoch"] + list(history.keys()))
+            for i in range(len(history["G_total"])):
+                row = [i + 1] + [history[k][i] for k in history]
+                writer.writerow(row)
 
         # ---- Validation (using EMA model) ----------------------------------
         if epoch % val_freq == 0:
