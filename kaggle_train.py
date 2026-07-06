@@ -1,102 +1,78 @@
 """
-kaggle_train.py — SAR-to-EO Training Script for Kaggle
-
-Run this file directly on Kaggle instead of using the notebook.
-It handles all setup, dataset discovery, and training in one shot.
-
-How to use on Kaggle:
-  1. Create a new Notebook (GPU P100 or T4)
-  2. Add dataset: "requiemonk/sentinel12-image-pairs-segregated-by-terrain"
-  3. Enable Internet in Settings
-  4. Paste and run these cells (or upload this file and run: !python kaggle_train.py)
+SINGLE CELL — SAR2EO Complete Training on Kaggle
+Paste this entire block into one Kaggle cell and run.
 """
 
-# ============================================================
-# CELL 1 — Install dependencies & clone repo
-# ============================================================
-import subprocess, os, sys
+import subprocess, os, sys, yaml, shutil, torch
 
-def run(cmd):
-    print(f"\n>>> {cmd}")
-    result = subprocess.run(cmd, shell=True, capture_output=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"Command failed: {cmd}")
-
-# Install pinned dependencies
-run("pip install -q lpips pytorch-fid")
-
-# Clone latest code
-if os.path.exists("/kaggle/working/sar2eo"):
-    run("cd /kaggle/working/sar2eo && git pull")
+# ── 1. Clone / pull repo ────────────────────────────────────────────────────
+REPO = "/kaggle/working/sar2eo"
+if os.path.exists(REPO):
+    subprocess.run(f"cd {REPO} && git pull --quiet", shell=True)
 else:
-    run("git clone https://github.com/Trafalgar-2006/sar2eo.git /kaggle/working/sar2eo")
+    subprocess.run(
+        f"git clone --quiet https://github.com/Trafalgar-2006/sar2eo.git {REPO}",
+        shell=True, check=True
+    )
+sys.path.insert(0, REPO)
+os.chdir(REPO)
+print("✓ Repo ready")
 
-os.chdir("/kaggle/working/sar2eo")
-sys.path.insert(0, "/kaggle/working/sar2eo")
-print("\n✓ Repo ready at /kaggle/working/sar2eo")
+# ── 2. Install extra deps (lpips + pytorch-fid; torch/torchvision pre-installed) ──
+subprocess.run("pip install -q lpips pytorch-fid", shell=True, check=True)
+print("✓ Deps installed")
 
-# ============================================================
-# CELL 2 — Verify GPU + dataset
-# ============================================================
-import torch
+# ── 3. Auto-discover dataset path ───────────────────────────────────────────
+INPUT_ROOT = "/kaggle/input"
+KAGGLE_DATA = None
 
-print(f"PyTorch : {torch.__version__}")
-print(f"CUDA    : {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"GPU     : {torch.cuda.get_device_name(0)}")
-    print(f"VRAM    : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+# Walk /kaggle/input and find the folder that contains agri/urban/grassland etc.
+TERRAIN_KEYS = {"agri", "urban", "grassland", "barrenland",
+                "forest", "water", "mountain"}
 
-# Auto-discover the Kaggle dataset — handles any slug/mount name
-KAGGLE_INPUT = "/kaggle/input"
-print(f"\nDatasets available in {KAGGLE_INPUT}:")
-available = sorted(os.listdir(KAGGLE_INPUT)) if os.path.exists(KAGGLE_INPUT) else []
-for d in available:
-    print(f"  /kaggle/input/{d}")
-
-# Keywords to identify the Sentinel-1&2 terrain dataset
-SENTINEL_KEYWORDS = ["sentinel", "sentinel12", "sar", "s1", "s2", "terrain"]
-SEN12_KEYWORDS    = ["sen1-2", "sen12", "tum", "munich"]
-
-def find_dataset(keywords):
-    """Find a mounted Kaggle dataset whose folder name contains any keyword."""
-    for d in available:
-        d_lower = d.lower()
-        if any(kw in d_lower for kw in keywords):
-            path = os.path.join(KAGGLE_INPUT, d)
-            if os.path.isdir(path):
-                return path
-    return None
-
-KAGGLE_DATA = find_dataset(SENTINEL_KEYWORDS)
-SEN12_DATA  = find_dataset(SEN12_KEYWORDS)
+for candidate in sorted(os.listdir(INPUT_ROOT)):
+    cpath = os.path.join(INPUT_ROOT, candidate)
+    if not os.path.isdir(cpath):
+        continue
+    subdirs = {d.lower() for d in os.listdir(cpath) if os.path.isdir(os.path.join(cpath, d))}
+    # Direct terrain folders inside this dataset dir
+    if subdirs & TERRAIN_KEYS:
+        KAGGLE_DATA = cpath
+        print(f"✓ Dataset found (direct): {KAGGLE_DATA}")
+        print(f"  Subdirs: {sorted(subdirs)}")
+        break
+    # One level deeper (dataset_name/dataset_name/agri/...)
+    for sub in os.listdir(cpath):
+        subpath = os.path.join(cpath, sub)
+        if not os.path.isdir(subpath):
+            continue
+        subsubdirs = {d.lower() for d in os.listdir(subpath)
+                      if os.path.isdir(os.path.join(subpath, d))}
+        if subsubdirs & TERRAIN_KEYS:
+            KAGGLE_DATA = subpath
+            print(f"✓ Dataset found (nested): {KAGGLE_DATA}")
+            print(f"  Subdirs: {sorted(subsubdirs)}")
+            break
+    if KAGGLE_DATA:
+        break
 
 if KAGGLE_DATA is None:
+    print(f"\nAll /kaggle/input contents:")
+    for x in os.listdir(INPUT_ROOT):
+        p = os.path.join(INPUT_ROOT, x)
+        print(f"  {x}/  → {os.listdir(p)[:5]}")
     raise FileNotFoundError(
-        f"\n✗ Could not find Sentinel-1&2 dataset in /kaggle/input/\n"
-        f"Available datasets: {available}\n\n"
-        f"FIX: Click 'Add Input' (top right) → search 'sentinel12' → "
-        f"add 'Sentinel-1&2 Image Pairs (SAR & Optical)'"
+        "Could not find terrain dataset. "
+        "Make sure 'Sentinel-1&2 Image Pairs' is added under Add Input."
     )
 
-terrains = [d for d in os.listdir(KAGGLE_DATA)
-            if os.path.isdir(os.path.join(KAGGLE_DATA, d))]
-print(f"\n✓ Kaggle dataset: {KAGGLE_DATA}")
-print(f"  Terrains found: {terrains}")
+# ── 4. Verify GPU ─────────────────────────────────────────────────────────
+print(f"\n✓ CUDA: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"  GPU : {torch.cuda.get_device_name(0)}")
+    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
 
-if os.path.exists(SEN12_DATA):
-    print(f"✓ SEN1-2 dataset found at {SEN12_DATA}")
-else:
-    print(f"ℹ SEN1-2 not found — training on Kaggle dataset only (still great)")
-    SEN12_DATA = None
-
-# ============================================================
-# CELL 3 — Write config for this environment
-# ============================================================
-import yaml
-
-# Determine dataset mode
-dataset_type = "combined" if SEN12_DATA else "kaggle"
-
+# ── 5. Write Kaggle-specific config ──────────────────────────────────────
 config = {
     "model": {
         "input_channels": 1,
@@ -104,7 +80,7 @@ config = {
         "base_ch": 64,
         "use_attention": True,
         "pretrained_encoder": True,
-        "gradient_checkpointing": False,  # set True if you get OOM
+        "gradient_checkpointing": False,
         "n_scales_D": 3,
         "n_layers_D": 3,
     },
@@ -134,9 +110,9 @@ config = {
     },
     "active_ablation": "full",
     "data": {
-        "dataset_type":   dataset_type,
+        "dataset_type":   "kaggle",
         "split_strategy": "random",
-        "sen12_root":     SEN12_DATA or "./data/SEN1-2",
+        "sen12_root":     "./data/SEN1-2",
         "train_seasons":  ["spring", "summer", "fall"],
         "val_seasons":    ["winter"],
         "test_seasons":   ["winter"],
@@ -146,7 +122,7 @@ config = {
         "test_terrain":   ["urban"],
         "image_size":     256,
         "subset_size":    None,
-        "num_workers":    2,         # 2 is safe on Kaggle
+        "num_workers":    2,
     },
     "augmentation": {
         "horizontal_flip":      True,
@@ -162,144 +138,63 @@ config = {
     },
 }
 
-config_path = "/kaggle/working/sar2eo/config_kaggle.yaml"
-with open(config_path, "w") as f:
+CFG_PATH = f"{REPO}/config_kaggle.yaml"
+with open(CFG_PATH, "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+print(f"✓ Config written → {CFG_PATH}")
 
-print(f"✓ Config written → {config_path}")
-print(f"  dataset_type  : {dataset_type}")
-print(f"  epochs        : {config['training']['epochs']}")
-print(f"  batch_size    : {config['training']['batch_size']}")
-print(f"  mixed_precision: {config['training']['mixed_precision']}")
-
-# ============================================================
-# CELL 4 — Quick model smoke test (shape + VRAM)
-# ============================================================
-import torch
+# ── 6. Quick smoke test ───────────────────────────────────────────────────
 from models.generator     import UNetGenerator
 from models.discriminator import MultiScaleDiscriminator
 
-device = torch.device("cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 G = UNetGenerator(in_channels=1, out_channels=3, use_attention=True, pretrained=True).to(device)
 D = MultiScaleDiscriminator().to(device)
 
-x    = torch.randn(2, 1, 256, 256).to(device)
-eo   = torch.randn(2, 3, 256, 256).to(device)
+with torch.no_grad():
+    with torch.amp.autocast(device_type="cuda", enabled=torch.cuda.is_available()):
+        out  = G(torch.randn(2, 1, 256, 256).to(device))
+        disc = D(torch.randn(2, 1, 256, 256).to(device),
+                 torch.randn(2, 3, 256, 256).to(device))
 
-with torch.amp.autocast(device_type="cuda"):
-    out  = G(x)
-    disc = D(x, eo)
-
-print(f"G output : {out.shape}    range=[{out.min():.2f},{out.max():.2f}]")
-print(f"D scales : {[tuple(d.shape) for d in disc]}")
-print(f"G params : {sum(p.numel() for p in G.parameters()):,}")
-vram = torch.cuda.max_memory_allocated() / 1e9
-print(f"VRAM used: {vram:.2f} GB")
-
-# If VRAM > 14 GB, enable gradient_checkpointing in config
-if vram > 14:
-    print("⚠ VRAM tight — consider setting gradient_checkpointing: true")
-
-del G, D, x, eo, out
+print(f"✓ G output: {out.shape}, range=[{out.min():.2f},{out.max():.2f}]")
+print(f"✓ D scales: {[tuple(d.shape) for d in disc]}")
+print(f"✓ G params: {sum(p.numel() for p in G.parameters()):,}")
+vram_used = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0
+print(f"✓ VRAM (smoke test): {vram_used:.2f} GB")
+del G, D, out, disc
 torch.cuda.empty_cache()
-print("\n✓ Smoke test passed")
 
-# ============================================================
-# CELL 5 — TRAIN (the main event)
-# ============================================================
-import sys
-sys.argv = ["train.py", "--config", config_path, "--ablation", "full"]
-
+# ── 7. TRAIN ─────────────────────────────────────────────────────────────
 from train import train, load_config, make_dirs
 
-cfg = load_config(config_path)
+cfg = load_config(CFG_PATH)
 make_dirs(cfg)
 
-print("\n" + "="*65)
-print(" Starting training — ResNet50-UNet + CBAM + Multi-Scale D")
-print("="*65)
+print("\n" + "="*60)
+print(" TRAINING — ResNet50-UNet + CBAM + Multi-Scale PatchGAN")
+print("="*60 + "\n")
+
 G = train(cfg)
 print("\n✓ Training complete!")
 
-# ============================================================
-# CELL 6 — EVALUATE
-# ============================================================
-import sys
-sys.argv = [
-    "eval.py",
-    "--config",  config_path,
-    "--weights", "/kaggle/working/checkpoints/full/best.pth",
-    "--split",   "test",
-]
-
+# ── 8. EVALUATE ──────────────────────────────────────────────────────────
 from eval import run_inference_to_dir, evaluate_dirs
-import yaml
 
-with open(config_path) as f:
-    cfg = yaml.safe_load(f)
+WEIGHTS   = "/kaggle/working/checkpoints/full/best.pth"
+PRED_DIR  = "/kaggle/working/outputs/eval_preds_test"
+GT_DIR    = "/kaggle/working/outputs/eval_gt_test"
+OUT_CSV   = "/kaggle/working/outputs/metrics_test.csv"
 
-ablation  = cfg.get("active_ablation", "full")
-pred_dir  = f"/kaggle/working/outputs/eval_preds_{ablation}_test"
-gt_dir    = f"/kaggle/working/outputs/eval_gt_{ablation}_test"
-out_csv   = f"/kaggle/working/outputs/metrics_{ablation}_test.csv"
+run_inference_to_dir(CFG_PATH, WEIGHTS, "test", PRED_DIR, GT_DIR, use_tta=False)
+metrics = evaluate_dirs(PRED_DIR, GT_DIR, OUT_CSV, split="test")
 
-run_inference_to_dir(
-    config_path  = config_path,
-    weights_path = "/kaggle/working/checkpoints/full/best.pth",
-    split        = "test",
-    pred_dir     = pred_dir,
-    gt_dir       = gt_dir,
-    use_tta      = False,     # set True for best quality (4× slower)
-)
-
-metrics = evaluate_dirs(pred_dir, gt_dir, out_csv, split="test")
-
-# Also run with TTA and compare
-print("\n--- Running TTA evaluation ---")
-pred_dir_tta = pred_dir + "_tta"
-gt_dir_tta   = gt_dir   + "_tta"
-out_csv_tta  = out_csv.replace(".csv", "_tta.csv")
-
-run_inference_to_dir(
-    config_path  = config_path,
-    weights_path = "/kaggle/working/checkpoints/full/best.pth",
-    split        = "test",
-    pred_dir     = pred_dir_tta,
-    gt_dir       = gt_dir_tta,
-    use_tta      = True,
-)
-metrics_tta = evaluate_dirs(pred_dir_tta, gt_dir_tta, out_csv_tta, split="test")
-
-print("\n=== FINAL COMPARISON ===")
-print(f"                   No TTA       With TTA")
-print(f"  SSIM  ↑  :  {metrics['ssim']:.4f}      {metrics_tta['ssim']:.4f}")
-print(f"  PSNR  ↑  :  {metrics['psnr']:.2f} dB   {metrics_tta['psnr']:.2f} dB")
-print(f"  LPIPS ↓  :  {metrics['lpips']:.4f}      {metrics_tta['lpips']:.4f}")
-print(f"  FID   ↓  :  {metrics['fid']:.2f}       {metrics_tta['fid']:.2f}")
-
-# ============================================================
-# CELL 7 — SAVE OUTPUTS (copy to /kaggle/working for download)
-# ============================================================
-import shutil
-
-# Package everything worth keeping
-artifacts = [
-    "/kaggle/working/checkpoints/full/best.pth",
-    "/kaggle/working/checkpoints/full/final.pth",
-    out_csv,
-    out_csv_tta,
-    "/kaggle/working/outputs/loss_curve_full.png",
-    "/kaggle/working/outputs/losses_full.csv",
-]
-
-for path in artifacts:
-    if os.path.exists(path):
-        print(f"✓ {path}")
-    else:
-        print(f"✗ NOT FOUND: {path}")
-
-print("\nDownload these files from the Kaggle output panel →")
-print("  best.pth      — trained model weights (EMA)")
-print("  metrics_*.csv — evaluation results")
-print("  loss_curve_full.png — training curves")
-print("  losses_full.csv     — raw loss values for plotting")
+print("\n" + "="*50)
+print("  FINAL METRICS")
+print("="*50)
+print(f"  SSIM  ↑ : {metrics['ssim']:.4f}")
+print(f"  PSNR  ↑ : {metrics['psnr']:.2f} dB")
+print(f"  LPIPS ↓ : {metrics['lpips']:.4f}")
+print(f"  FID   ↓ : {metrics['fid']:.2f}")
+print("="*50)
+print("\n✓ Done! Download outputs from /kaggle/working/")
