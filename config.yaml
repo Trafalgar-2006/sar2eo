@@ -4,7 +4,7 @@
 # ============================================================
 
 model:
-  input_channels: 1           # SAR: single-channel VV
+  input_channels: 1           # SAR: 1=VV only, 2=VV+VH dual-pol (upgrade → set to 2)
   output_channels: 3          # EO: RGB
   base_ch: 64                 # Legacy field (kept for API compat, not used by ResNet50 encoder)
   use_attention: true         # CBAM on encoder skip connections
@@ -12,6 +12,9 @@ model:
   gradient_checkpointing: false  # Set true if OOM on Kaggle (saves ~3GB VRAM, ~20% slower)
   n_scales_D: 3               # Multi-scale discriminator: 1× + 0.5× + 0.25×
   n_layers_D: 3               # PatchGAN depth per scale
+  # Phase 1.5 upgrade: set input_channels=2 + vv_vh=true to enable dual polarization
+  # Requires dataset with VH channel alongside VV (SEN12MS has both)
+  vv_vh_dual_pol: false       # false=VV only (current), true=VV+VH (+0.03-0.05 SSIM)
 
 training:
   epochs: 150                 # More epochs — larger model benefits from longer training
