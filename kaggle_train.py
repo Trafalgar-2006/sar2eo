@@ -46,20 +46,42 @@ if torch.cuda.is_available():
     print(f"GPU     : {torch.cuda.get_device_name(0)}")
     print(f"VRAM    : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
-# Check Kaggle dataset is mounted
-KAGGLE_DATA = "/kaggle/input/sentinel12-image-pairs-segregated-by-terrain"
-SEN12_DATA  = "/kaggle/input/sen1-2"          # Optional — if you added SEN1-2 too
+# Auto-discover the Kaggle dataset — handles any slug/mount name
+KAGGLE_INPUT = "/kaggle/input"
+print(f"\nDatasets available in {KAGGLE_INPUT}:")
+available = sorted(os.listdir(KAGGLE_INPUT)) if os.path.exists(KAGGLE_INPUT) else []
+for d in available:
+    print(f"  /kaggle/input/{d}")
 
-if os.path.exists(KAGGLE_DATA):
-    terrains = [d for d in os.listdir(KAGGLE_DATA)
-                if os.path.isdir(os.path.join(KAGGLE_DATA, d))]
-    print(f"\n✓ Kaggle dataset found: {terrains}")
-else:
+# Keywords to identify the Sentinel-1&2 terrain dataset
+SENTINEL_KEYWORDS = ["sentinel", "sentinel12", "sar", "s1", "s2", "terrain"]
+SEN12_KEYWORDS    = ["sen1-2", "sen12", "tum", "munich"]
+
+def find_dataset(keywords):
+    """Find a mounted Kaggle dataset whose folder name contains any keyword."""
+    for d in available:
+        d_lower = d.lower()
+        if any(kw in d_lower for kw in keywords):
+            path = os.path.join(KAGGLE_INPUT, d)
+            if os.path.isdir(path):
+                return path
+    return None
+
+KAGGLE_DATA = find_dataset(SENTINEL_KEYWORDS)
+SEN12_DATA  = find_dataset(SEN12_KEYWORDS)
+
+if KAGGLE_DATA is None:
     raise FileNotFoundError(
-        f"Dataset not found at {KAGGLE_DATA}\n"
-        f"Add dataset 'requiemonk/sentinel12-image-pairs-segregated-by-terrain' "
-        f"in Kaggle Notebook settings."
+        f"\n✗ Could not find Sentinel-1&2 dataset in /kaggle/input/\n"
+        f"Available datasets: {available}\n\n"
+        f"FIX: Click 'Add Input' (top right) → search 'sentinel12' → "
+        f"add 'Sentinel-1&2 Image Pairs (SAR & Optical)'"
     )
+
+terrains = [d for d in os.listdir(KAGGLE_DATA)
+            if os.path.isdir(os.path.join(KAGGLE_DATA, d))]
+print(f"\n✓ Kaggle dataset: {KAGGLE_DATA}")
+print(f"  Terrains found: {terrains}")
 
 if os.path.exists(SEN12_DATA):
     print(f"✓ SEN1-2 dataset found at {SEN12_DATA}")
