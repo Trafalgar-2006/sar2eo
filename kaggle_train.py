@@ -18,9 +18,35 @@ sys.path.insert(0, REPO)
 os.chdir(REPO)
 print("✓ Repo ready")
 
-# ── 2. Install extra deps (lpips + pytorch-fid; torch/torchvision pre-installed) ──
+# ── 2. Install extra deps ─────────────────────────────────────────────────────
 subprocess.run("pip install -q lpips pytorch-fid", shell=True, check=True)
 print("✓ Deps installed")
+
+# ── 2.5 Auto-resume: restore checkpoints from previous Kaggle session ─────────
+# If you add a previous session's output as an input dataset, this copies
+# the checkpoints so training auto-resumes from the last saved epoch.
+CKPT_DST = "/kaggle/working/checkpoints/full"
+os.makedirs(CKPT_DST, exist_ok=True)
+
+resumed = False
+for dirpath, dirnames, filenames in os.walk("/kaggle/input"):
+    pth_files = [f for f in filenames if f.endswith(".pth")]
+    if pth_files:
+        print(f"✓ Found previous checkpoints in: {dirpath}")
+        for f in pth_files:
+            src = os.path.join(dirpath, f)
+            dst = os.path.join(CKPT_DST, f)
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                print(f"  Copied: {f}")
+        resumed = True
+        break
+
+if resumed:
+    latest = sorted([f for f in os.listdir(CKPT_DST) if f.startswith("epoch_")])
+    print(f"  Will resume from: {latest[-1] if latest else 'best.pth'}")
+else:
+    print("  No previous checkpoints found — starting from scratch")
 
 # ── 3. Auto-discover dataset path (searches ANY depth) ───────────────────────
 INPUT_ROOT  = "/kaggle/input"
@@ -70,7 +96,7 @@ config = {
         "n_layers_D": 3,
     },
     "training": {
-        "epochs": 150,
+        "epochs": 65,           # fits in 12hr Kaggle session (65 × ~9.5min ≈ 10.5hrs)
         "batch_size": 8,
         "lr_encoder": 2e-5,
         "lr_decoder": 2e-4,
@@ -82,8 +108,8 @@ config = {
         "gradient_clip_norm": 1.0,
         "ema_decay": 0.999,
         "mixed_precision": True,
-        "save_freq": 10,
-        "val_freq": 5,
+        "save_freq": 5,         # save every 5 epochs — more recovery points
+        "val_freq": 10,         # validate every 10 epochs — saves ~1hr vs val_freq=5
         "seed": 42,
     },
     "loss": {
