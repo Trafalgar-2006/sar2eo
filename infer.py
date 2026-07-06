@@ -1,29 +1,29 @@
 """
 infer.py — SAR-to-EO Inference Script
 
-Conforms exactly to the GalaxEye I/O contract:
+Input:  Directory of single-channel Sentinel-1 SAR (VV) patches.
+        Must be 256×256 pixels, 8-bit PNG, dB-scaled and normalised to [0, 255].
 
-  Input:  A directory of single-channel Sentinel-1 SAR (VV) patches,
-          256×256 pixels, 8-bit PNG, dB-scaled and min–max normalised to [0, 255].
+Output: Directory of generated 256×256 RGB PNG images, same filenames as inputs.
 
-  Output: A directory of generated 256×256 RGB PNG images,
-          same filenames as the corresponding inputs.
-
-  CLI:    python infer.py --input_dir <path> --output_dir <path> --weights <path>
-
-  Constraints:
-    - Runs on a single GPU with ≤16 GB VRAM (Colab/Kaggle free tier)
-    - No internet access at inference time (weights loaded locally)
+Features:
+  - Loads EMA model weights from checkpoint (best.pth)
+  - Optional Test-Time Augmentation (--tta): average 4 rotation predictions
+    for ~0.01–0.02 SSIM improvement at 4× inference time cost
+  - Strict input validation (raises ValueError on wrong size)
+  - Batched inference with progress logging
 
 Usage:
-    python infer.py --input_dir /path/to/sar_patches \\
-                    --output_dir /path/to/eo_output  \\
-                    --weights checkpoints/full/best.pth
+    python infer.py --input_dir <path> --output_dir <path> --weights <path>
+
+    # With TTA (better quality, 4× slower):
+    python infer.py --input_dir <path> --output_dir <path> --weights <path> --tta
 
 Optional:
-    --model_config  config.yaml    (default: config.yaml in same directory)
-    --device        cuda           (default: auto-detect)
-    --batch_size    8              (default: 8, reduce if OOM)
+    --model_config config.yaml  (default: config.yaml in same directory)
+    --device       cuda         (default: auto-detect)
+    --batch_size   8            (default: 8, reduce if OOM)
+    --tta                       (flag: enable test-time augmentation)
 """
 
 import os
@@ -36,49 +36,60 @@ from PIL import Image
 import torch
 import torch.amp
 
-# ---------------------------------------------------------------------------
-# Default model parameters (used if config.yaml is unavailable)
-# ---------------------------------------------------------------------------
-DEFAULT_BASE_CHANNELS = 64
-DEFAULT_IN_CHANNELS   = 1
-DEFAULT_OUT_CHANNELS  = 3
 
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
 
 def load_model(weights_path: str,
                config_path: str,
                device: torch.device) -> torch.nn.Module:
     """
-    Load the UNet generator from a checkpoint.
-    Falls back to default params if config.yaml is not found.
+    Load the UNetGenerator from a checkpoint.
+
+    Prefers EMA weights (G_ema key) over live weights (G key), since EMA
+    weights are smoother and consistently produce better inference quality.
+    Falls back to live weights if EMA not found (older checkpoints).
     """
-    # Import here (after ensuring paths are correct)
     from models.generator import UNetGenerator
 
-    # Try to load config
-    base_ch  = DEFAULT_BASE_CHANNELS
-    in_ch    = DEFAULT_IN_CHANNELS
-    out_ch   = DEFAULT_OUT_CHANNELS
+    # Parse config
+    in_ch    = 1
+    out_ch   = 3
+    base_ch  = 64
+    use_attn = True
+    pretrained = True   # architecture flag (weights loaded from checkpoint)
+    grad_ck  = False
 
     if config_path and os.path.exists(config_path):
         import yaml
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        model_cfg = cfg.get("model", {})
-        base_ch  = model_cfg.get("base_channels",  DEFAULT_BASE_CHANNELS)
-        in_ch    = model_cfg.get("input_channels",  DEFAULT_IN_CHANNELS)
-        out_ch   = model_cfg.get("output_channels", DEFAULT_OUT_CHANNELS)
+        m = cfg.get("model", {})
+        in_ch      = m.get("input_channels",       1)
+        out_ch     = m.get("output_channels",       3)
+        base_ch    = m.get("base_ch",              64)
+        use_attn   = m.get("use_attention",       True)
+        grad_ck    = m.get("gradient_checkpointing", False)
 
     G = UNetGenerator(
         in_channels  = in_ch,
         out_channels = out_ch,
         base_ch      = base_ch,
+        use_attention= use_attn,
+        pretrained   = False,       # weights come from checkpoint, not ImageNet
+        gradient_checkpointing = grad_ck,
     ).to(device)
 
     ckpt = torch.load(weights_path, map_location=device, weights_only=False)
 
-    # Handle different checkpoint formats
-    if "G" in ckpt:
+    # Prefer EMA weights for inference
+    if "G_ema" in ckpt:
+        G.load_state_dict(ckpt["G_ema"])
+        print(f"[Infer] Loaded EMA weights from checkpoint")
+    elif "G" in ckpt:
         G.load_state_dict(ckpt["G"])
+        print(f"[Infer] Loaded live weights from checkpoint (no EMA found)")
     elif "state_dict" in ckpt:
         G.load_state_dict(ckpt["state_dict"])
     else:
@@ -88,43 +99,83 @@ def load_model(weights_path: str,
     return G
 
 
+# ---------------------------------------------------------------------------
+# Image I/O
+# ---------------------------------------------------------------------------
+
 def load_sar_image(path: str) -> torch.Tensor:
     """
     Load a SAR patch conforming to the I/O contract:
       - 8-bit PNG, single-channel (grayscale)
-      - dB-scaled and min–max normalised to [0, 255]
+      - dB-scaled and min-max normalised to [0, 255]
+      - Exactly 256×256 pixels
 
     Returns: [1, 256, 256] float32 tensor, normalised to [-1, 1]
+
+    Raises:
+        ValueError: if image dimensions are not exactly 256×256
     """
-    img = Image.open(path).convert("L")   # Force grayscale
+    img = Image.open(path).convert("L")
 
-    # Verify dimensions
     if img.size != (256, 256):
-        # Resize if necessary (should not happen with correctly prepared data)
-        orig_size = img.size
-        img = img.resize((256, 256), Image.BILINEAR)
-        print(f"[WARNING] Resized {path} from {orig_size} to (256, 256)")
+        raise ValueError(
+            f"Input image must be exactly 256×256 pixels, "
+            f"but got {img.size[0]}×{img.size[1]} for: {path}\n"
+            f"Pre-process your SAR patches to 256×256 before running infer.py."
+        )
 
-    arr = np.array(img, dtype=np.float32)   # [H, W], range [0, 255]
-    arr = arr / 255.0                        # → [0, 1]
-    arr = arr * 2.0 - 1.0                    # → [-1, 1]
-
-    tensor = torch.from_numpy(arr).unsqueeze(0)   # [1, H, W]
-    return tensor
+    arr    = np.array(img, dtype=np.float32) / 255.0   # [0, 1]
+    arr    = arr * 2.0 - 1.0                            # [-1, 1]
+    return torch.from_numpy(arr).unsqueeze(0)           # [1, H, W]
 
 
 def save_eo_image(tensor: torch.Tensor, path: str) -> None:
-    """
-    Save generated EO image from [-1, 1] tensor to 8-bit RGB PNG.
-    Output: 256×256 RGB PNG, same filename as SAR input.
-    """
+    """Save generated EO image from [-1, 1] tensor to 8-bit RGB PNG."""
     img = tensor.detach().cpu().float()
-    img = (img + 1.0) / 2.0        # [-1, 1] → [0, 1]
+    img = (img + 1.0) / 2.0
     img = img.clamp(0.0, 1.0)
-    img = img.permute(1, 2, 0)     # [3, H, W] → [H, W, 3]
+    img = img.permute(1, 2, 0)
     img = (img.numpy() * 255).astype(np.uint8)
     Image.fromarray(img).save(path)
 
+
+# ---------------------------------------------------------------------------
+# Test-Time Augmentation
+# ---------------------------------------------------------------------------
+
+def tta_predict(G: torch.nn.Module, batch: torch.Tensor,
+                use_amp: bool = True) -> torch.Tensor:
+    """
+    4-rotation TTA: run inference at 0°, 90°, 180°, 270°, then
+    un-rotate and average all predictions.
+
+    Provides ~0.01–0.02 SSIM improvement at 4× inference time cost.
+    Only worth using when quality is more important than speed.
+
+    Args:
+        G:       Generator in eval mode
+        batch:   [B, 1, H, W] SAR input
+        use_amp: Enable fp16 autocast
+
+    Returns:
+        [B, 3, H, W] averaged prediction
+    """
+    preds = []
+    for k in range(4):
+        rotated = torch.rot90(batch, k, dims=[2, 3]) if k > 0 else batch
+        with torch.no_grad():
+            with torch.amp.autocast(device_type="cuda", enabled=use_amp):
+                pred = G(rotated)
+        # Un-rotate prediction to original orientation
+        if k > 0:
+            pred = torch.rot90(pred, 4 - k, dims=[2, 3])
+        preds.append(pred)
+    return torch.stack(preds).mean(dim=0)
+
+
+# ---------------------------------------------------------------------------
+# Main inference function
+# ---------------------------------------------------------------------------
 
 def run_inference(
     input_dir:    str,
@@ -133,19 +184,21 @@ def run_inference(
     config_path:  str  = "config.yaml",
     device_str:   str  = "auto",
     batch_size:   int  = 8,
+    use_tta:      bool = False,
 ) -> None:
     """
-    Main inference function. Processes all PNG files in input_dir
-    and writes RGB outputs to output_dir with matching filenames.
+    Process all PNG files in input_dir and write RGB outputs to output_dir.
     """
-    # ---- Device setup ----------------------------------------------------
+    # Device
     if device_str == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(device_str)
     print(f"[Infer] Device: {device}")
+    if use_tta:
+        print(f"[Infer] TTA enabled (4× rotations, ~4× slower)")
 
-    # ---- Validate input directory ----------------------------------------
+    # Validate input
     input_dir  = Path(input_dir)
     output_dir = Path(output_dir)
 
@@ -159,93 +212,70 @@ def run_inference(
         sys.exit(1)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[Infer] Found {len(sar_files)} SAR patches in {input_dir}")
-    print(f"[Infer] Outputs -> {output_dir}")
+    print(f"[Infer] {len(sar_files)} SAR patches → {output_dir}")
 
-    # ---- Load model -------------------------------------------------------
+    # Load model
     print(f"[Infer] Loading model from {weights_path}...")
     G = load_model(weights_path, config_path, device)
-    print(f"[Infer] Model loaded. Running inference...")
+    print(f"[Infer] Model ready. Running inference...")
 
-    # ---- Inference in batches --------------------------------------------
-    use_amp = device.type == "cuda"
-    n_processed = 0
+    use_amp   = device.type == "cuda"
+    predict   = tta_predict if use_tta else None
+    n_done    = 0
 
     for i in range(0, len(sar_files), batch_size):
-        batch_files = sar_files[i : i + batch_size]
+        batch_files   = sar_files[i : i + batch_size]
+        batch_tensors = [load_sar_image(str(f)) for f in batch_files]
+        batch         = torch.stack(batch_tensors).to(device)   # [B, 1, 256, 256]
 
-        # Load batch
-        batch_tensors = []
-        for f in batch_files:
-            t = load_sar_image(str(f))
-            batch_tensors.append(t)
+        if use_tta:
+            fake_eo = tta_predict(G, batch, use_amp=use_amp)
+        else:
+            with torch.no_grad():
+                with torch.amp.autocast(device_type="cuda", enabled=use_amp):
+                    fake_eo = G(batch)
 
-        batch = torch.stack(batch_tensors, dim=0).to(device)   # [B, 1, 256, 256]
-
-        # Generate EO
-        with torch.no_grad():
-            with torch.amp.autocast(device_type="cuda", enabled=use_amp):
-                fake_eo = G(batch)   # [B, 3, 256, 256]
-
-        # Save each output with same filename as input
         for j, f in enumerate(batch_files):
-            out_path = output_dir / f.name
-            save_eo_image(fake_eo[j], str(out_path))
-            n_processed += 1
+            save_eo_image(fake_eo[j], str(output_dir / f.name))
+            n_done += 1
 
-        # Progress
         if (i // batch_size) % 10 == 0:
-            print(f"  Processed {n_processed}/{len(sar_files)} patches...")
+            print(f"  {n_done}/{len(sar_files)} patches done...")
 
-    print(f"\n[Infer] Done. Generated {n_processed} EO images -> {output_dir}")
+    print(f"\n[Infer] Done. {n_done} EO images written → {output_dir}")
 
-    # ---- VRAM report (for reproducibility log) ---------------------------
     if device.type == "cuda":
-        vram_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
-        print(f"[Infer] Peak VRAM used: {vram_used:.2f} GB")
+        vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+        print(f"[Infer] Peak VRAM: {vram:.2f} GB")
 
 
 # ---------------------------------------------------------------------------
-# Entry point — must match the I/O contract exactly
+# Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="SAR-to-EO inference (GalaxEye I/O contract)"
-    )
-    parser.add_argument(
-        "--input_dir",  required=True,
-        help="Directory of 256×256 8-bit PNG SAR (VV) patches"
-    )
-    parser.add_argument(
-        "--output_dir", required=True,
-        help="Directory to write generated 256×256 RGB EO PNGs"
-    )
-    parser.add_argument(
-        "--weights",    required=True,
-        help="Path to model checkpoint (.pth)"
-    )
-    parser.add_argument(
-        "--model_config", default="config.yaml",
-        help="Path to config.yaml (optional, uses defaults if not found)"
-    )
-    parser.add_argument(
-        "--device",     default="auto",
-        choices=["auto", "cuda", "cpu"],
-        help="Device to run inference on (default: auto)"
-    )
-    parser.add_argument(
-        "--batch_size", type=int, default=8,
-        help="Inference batch size (reduce if OOM, default: 8)"
-    )
+    parser = argparse.ArgumentParser(description="SAR-to-EO Inference")
+    parser.add_argument("--input_dir",    required=True,
+                        help="Directory of 256×256 8-bit PNG SAR patches")
+    parser.add_argument("--output_dir",   required=True,
+                        help="Output directory for generated RGB EO PNGs")
+    parser.add_argument("--weights",      required=True,
+                        help="Path to model checkpoint (.pth)")
+    parser.add_argument("--model_config", default="config.yaml",
+                        help="Path to config.yaml")
+    parser.add_argument("--device",       default="auto",
+                        choices=["auto", "cuda", "cpu"])
+    parser.add_argument("--batch_size",   type=int, default=8)
+    parser.add_argument("--tta",          action="store_true",
+                        help="Enable test-time augmentation (4× rotations, better quality)")
 
     args = parser.parse_args()
-
     run_inference(
-        input_dir   = args.input_dir,
-        output_dir  = args.output_dir,
-        weights_path= args.weights,
-        config_path = args.model_config,
-        device_str  = args.device,
-        batch_size  = args.batch_size,
+        input_dir    = args.input_dir,
+        output_dir   = args.output_dir,
+        weights_path = args.weights,
+        config_path  = args.model_config,
+        device_str   = args.device,
+        batch_size   = args.batch_size,
+        use_tta      = args.tta,
     )

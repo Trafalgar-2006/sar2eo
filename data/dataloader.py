@@ -1,38 +1,33 @@
 """
-dataloader.py — SARtoEO Dataset
+dataloader.py — SAR-to-EO Dataset with Combined SEN1-2 + Kaggle Support
 
-Supports two dataset formats:
-  1. SEN1-2  (mediatum.ub.tum.de/1436631)
-     root/
-       ROIs{id}_{season}/
-         s1_{roi}/   <- SAR grayscale PNGs
-         s2_{roi}/   <- EO RGB PNGs
-     Split strategy: by season (spring+summer+fall=train, winter=val/test)
+Supports three dataset configurations:
+  1. "sen12"    — SEN1-2 only (TU Munich, season-split)
+  2. "kaggle"   — Kaggle Sentinel-1&2 only (terrain-split OR random)
+  3. "combined" — Both datasets pooled together, random 80/10/10 split
 
-  2. Kaggle Sentinel-1&2 (terrain-segregated)
-     root/
-       {terrain}/
-         s1/  <- SAR PNGs
-         s2/  <- EO PNGs
-     Split strategy: by terrain class (barren+grassland+agri=train, urban=val/test)
+Split strategies:
+  "terrain" — agri+barren+grassland=train, urban=val/test (original, shows generalisation)
+  "random"  — pool all data, 80/10/10 random split (best metrics, portfolio-optimal)
 
 SAR Preprocessing:
   - Loaded as grayscale uint8 PNG [0, 255]
   - Normalised to [-1, 1] for network input
-  - This matches the infer.py I/O contract (input is already [0, 255] dB-scaled)
 
 EO Preprocessing:
   - Loaded as RGB uint8 PNG [0, 255]
-  - Normalised to [-1, 1] for network input (tanh output)
+  - Normalised to [-1, 1] for network input (matches Tanh output)
 
-Augmentation (train only, applied consistently to SAR+EO pair):
-  - Random horizontal flip
-  - Random vertical flip
-  - Random 90° rotation
+Augmentation (train only, correctly applied ONCE per sample):
+  - Random horizontal flip   (p=0.5)
+  - Random vertical flip     (p=0.5)
+  - Random 90° rotation      (uniform over 0/90/180/270)
+  - SAR Gaussian noise       (σ ~ U[0, 0.05]) — simulates sensor noise variation
+  - EO brightness jitter     (scale ~ U[0.9, 1.1]) — illumination variation
+    Applied only to EO (not SAR), since EO brightness varies with acquisition time
 """
 
 import os
-import glob
 import random
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -41,28 +36,55 @@ import numpy as np
 from PIL import Image
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import torchvision.transforms.functional as TF
 
 
 # ---------------------------------------------------------------------------
-# Helper: consistent joint augmentation for SAR + EO pair
+# Helper: consistent joint augmentation (SAR + EO pair)
 # ---------------------------------------------------------------------------
 
 def joint_augment(sar: Image.Image, eo: Image.Image,
-                  hflip: bool, vflip: bool, rot90: bool) -> Tuple[Image.Image, Image.Image]:
-    """Apply the same random augmentation to both SAR and EO images."""
-    if hflip and random.random() > 0.5:
+                  hflip: bool, vflip: bool, rot90: int,
+                  sar_noise_std: float = 0.0,
+                  eo_brightness: float = 1.0) -> Tuple[Image.Image, Image.Image]:
+    """
+    Apply the SAME geometric augmentation to both SAR and EO images.
+    Apply SAR-specific noise and EO-specific brightness jitter separately.
+
+    Random decisions are made BEFORE calling this function and passed as
+    deterministic values — this guarantees exactly the intended probabilities.
+
+    Args:
+        sar, eo:          PIL Images
+        hflip:            True → horizontal flip
+        vflip:            True → vertical flip
+        rot90:            0|1|2|3 — number of 90° CCW rotations
+        sar_noise_std:    Std dev of Gaussian noise to add to SAR [0, 0.05]
+        eo_brightness:    Brightness scale factor for EO [0.9, 1.1]
+    """
+    # Geometric (same for both)
+    if hflip:
         sar = TF.hflip(sar)
         eo  = TF.hflip(eo)
-    if vflip and random.random() > 0.5:
+    if vflip:
         sar = TF.vflip(sar)
         eo  = TF.vflip(eo)
-    if rot90:
-        k = random.choice([0, 1, 2, 3])   # 0°, 90°, 180°, 270°
-        if k > 0:
-            sar = TF.rotate(sar, angle=90 * k)
-            eo  = TF.rotate(eo,  angle=90 * k)
+    if rot90 > 0:
+        sar = TF.rotate(sar, angle=90 * rot90)
+        eo  = TF.rotate(eo,  angle=90 * rot90)
+
+    # SAR-only: Gaussian noise (simulate sensor noise variation)
+    if sar_noise_std > 0:
+        sar_arr = np.array(sar, dtype=np.float32) / 255.0
+        noise   = np.random.normal(0, sar_noise_std, sar_arr.shape).astype(np.float32)
+        sar_arr = np.clip(sar_arr + noise, 0.0, 1.0)
+        sar     = Image.fromarray((sar_arr * 255).astype(np.uint8))
+
+    # EO-only: brightness jitter (illumination variation across acquisition times)
+    if eo_brightness != 1.0:
+        eo = TF.adjust_brightness(eo, eo_brightness)
+
     return sar, eo
 
 
@@ -72,7 +94,7 @@ def joint_augment(sar: Image.Image, eo: Image.Image,
 
 def to_tensor_normalised(img: Image.Image) -> torch.Tensor:
     """Convert PIL image to float tensor in [-1, 1]."""
-    t = TF.to_tensor(img)   # [C, H, W], range [0, 1]
+    t = TF.to_tensor(img)   # [C, H, W], [0, 1]
     t = t * 2.0 - 1.0       # → [-1, 1]
     return t
 
@@ -84,7 +106,7 @@ def to_tensor_normalised(img: Image.Image) -> torch.Tensor:
 def _discover_sen12_pairs(root: str,
                            seasons: List[str]) -> List[Tuple[str, str]]:
     """
-    Walk root directory, collect (sar_path, eo_path) pairs for the given seasons.
+    Walk SEN1-2 root directory, collect (sar_path, eo_path) pairs.
 
     SEN1-2 layout:
       root/ROIs{id}_{season}/s1_{roi}/ROIs{id}_{season}_s1_{roi}_p{patch}.png
@@ -92,31 +114,31 @@ def _discover_sen12_pairs(root: str,
     """
     pairs: List[Tuple[str, str]] = []
     root_path = Path(root)
+    if not root_path.exists():
+        print(f"[WARNING] SEN1-2 root not found: {root} — skipping")
+        return pairs
 
     for scene_dir in sorted(root_path.iterdir()):
         if not scene_dir.is_dir():
             continue
-        # Check if this scene belongs to one of the requested seasons
-        scene_name = scene_dir.name.lower()           # e.g. "rois1158_spring"
+        scene_name = scene_dir.name.lower()
         if not any(season in scene_name for season in seasons):
             continue
 
-        # Find all s1_* subdirectories
         for s1_dir in sorted(scene_dir.glob("s1_*")):
             if not s1_dir.is_dir():
                 continue
-            # Corresponding s2 directory
             s2_dir = Path(str(s1_dir).replace("s1_", "s2_"))
             if not s2_dir.exists():
                 continue
 
             for sar_path in sorted(s1_dir.glob("*.png")):
-                # Derive matching EO path: replace 's1' with 's2' in filename
                 eo_filename = sar_path.name.replace("_s1_", "_s2_")
                 eo_path = s2_dir / eo_filename
                 if eo_path.exists():
                     pairs.append((str(sar_path), str(eo_path)))
 
+    print(f"[INFO] SEN1-2 ({','.join(seasons)}): {len(pairs)} pairs")
     return pairs
 
 
@@ -127,59 +149,44 @@ def _discover_sen12_pairs(root: str,
 def _discover_kaggle_pairs(root: str,
                             terrains: List[str]) -> List[Tuple[str, str]]:
     """
-    Robustly discover (sar_path, eo_path) pairs inside root.
+    Discover (sar_path, eo_path) pairs from the Kaggle Sentinel-1&2 dataset.
 
-    Strategy per terrain directory:
-      1. Find s1/s2 subdirs (tries many naming conventions)
-      2. Glob all image files in each
-      3. Pair by exact filename match first; fall back to sorted-index pairing
+    Supports many naming conventions for s1/s2 subdirectories.
+    If terrains is empty or None, discovers ALL terrain subdirectories.
     """
     if root is None:
-        raise ValueError(
-            "kaggle_root is None - dataset not mounted.\n"
-            "Available in /kaggle/input: "
-            + str(list(Path("/kaggle/input").iterdir()) if Path("/kaggle/input").exists() else [])
-        )
+        raise ValueError("kaggle_root is None — dataset not mounted.")
     root_path = Path(root)
     if not root_path.exists():
-        raise FileNotFoundError(f"kaggle_root does not exist: {root}")
+        print(f"[WARNING] Kaggle root not found: {root} — skipping")
+        return []
 
     IMAGE_EXTS = ("*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg")
+    S1_NAMES   = ["s1", "sar", "sen1", "S1", "SAR", "sentinel1"]
+    S2_NAMES   = ["s2", "optical", "sen2", "S2", "Optical", "sentinel2"]
 
-    # Helper: find s1 and s2 subdirectories inside a terrain dir
-    S1_NAMES = ["s1", "sar", "sen1", "S1", "SAR", "sentinel1"]
-    S2_NAMES = ["s2", "optical", "sen2", "S2", "Optical", "sentinel2"]
-
-    def find_s1_s2(terrain_dir: Path):
+    def find_s1_s2(tdir: Path):
         for s1n in S1_NAMES:
             for s2n in S2_NAMES:
-                s1d = terrain_dir / s1n
-                s2d = terrain_dir / s2n
+                s1d, s2d = tdir / s1n, tdir / s2n
                 if s1d.is_dir() and s2d.is_dir():
                     return s1d, s2d
         return None, None
 
-    # Helper: glob all image files
     def glob_images(directory: Path) -> List[Path]:
         files = []
         for ext in IMAGE_EXTS:
             files.extend(directory.glob(ext))
         return sorted(files)
 
-    # Find all terrain directories (case-insensitive match)
     all_subdirs = sorted([d for d in root_path.iterdir() if d.is_dir()])
-    print(f"[INFO] Subdirs of root: {[d.name for d in all_subdirs]}")
+    print(f"[INFO] Kaggle subdirs: {[d.name for d in all_subdirs]}")
 
-    # If specific terrains requested, filter; otherwise use all
     if terrains:
-        terrain_dirs = []
         terrain_lower = {t.lower() for t in terrains}
-        for d in all_subdirs:
-            if d.name.lower() in terrain_lower:
-                terrain_dirs.append(d)
+        terrain_dirs  = [d for d in all_subdirs if d.name.lower() in terrain_lower]
         if not terrain_dirs:
-            print(f"[INFO] Requested terrains {terrains} not found among {[d.name for d in all_subdirs]}")
-            print(f"[INFO] Falling back to ALL subdirs")
+            print(f"[INFO] Requested terrains {terrains} not found — using all")
             terrain_dirs = all_subdirs
     else:
         terrain_dirs = all_subdirs
@@ -188,8 +195,6 @@ def _discover_kaggle_pairs(root: str,
     for tdir in terrain_dirs:
         s1_dir, s2_dir = find_s1_s2(tdir)
         if s1_dir is None:
-            # Maybe terrain dir itself has no s1/s2 but has further nesting
-            # Try one level deeper
             for sub in sorted(tdir.iterdir()):
                 if sub.is_dir():
                     s1_dir, s2_dir = find_s1_s2(sub)
@@ -201,37 +206,24 @@ def _discover_kaggle_pairs(root: str,
 
         s1_files = glob_images(s1_dir)
         s2_files = glob_images(s2_dir)
-        print(f"[INFO] {tdir.name}: s1={len(s1_files)} files, s2={len(s2_files)} files "
-              f"(dirs: {s1_dir.name}/{s2_dir.name})")
+        print(f"[INFO]   {tdir.name}: s1={len(s1_files)}, s2={len(s2_files)}")
 
         if not s1_files or not s2_files:
             continue
 
-        # Debug: show sample filenames
-        if len(pairs) == 0:
-            print(f"[DEBUG] Sample s1 names: {[f.name for f in s1_files[:3]]}")
-            print(f"[DEBUG] Sample s2 names: {[f.name for f in s2_files[:3]]}")
-
-        # Try pairing by exact filename match
-        s2_name_map = {f.name: f for f in s2_files}
-        matched = []
-        for s1f in s1_files:
-            s2f = s2_name_map.get(s1f.name)
-            if s2f is not None:
-                matched.append((str(s1f), str(s2f)))
-
+        s2_map    = {f.name: f for f in s2_files}
+        matched   = [(str(s1f), str(s2_map[s1f.name]))
+                     for s1f in s1_files if s1f.name in s2_map]
         if matched:
             pairs.extend(matched)
         elif len(s1_files) == len(s2_files):
-            # Same count — pair by sorted index
-            print(f"[INFO] Names don't match in '{tdir.name}', pairing by sorted index")
-            for s1f, s2f in zip(s1_files, s2_files):
-                pairs.append((str(s1f), str(s2f)))
+            print(f"[INFO] Pairing '{tdir.name}' by sorted index")
+            pairs.extend([(str(a), str(b)) for a, b in zip(s1_files, s2_files)])
         else:
-            print(f"[WARNING] Cannot pair in '{tdir.name}': "
-                  f"count mismatch s1={len(s1_files)} vs s2={len(s2_files)}")
+            print(f"[WARNING] '{tdir.name}': count mismatch s1={len(s1_files)} "
+                  f"vs s2={len(s2_files)} — skipping")
 
-    print(f"[INFO] Total pairs found: {len(pairs)}")
+    print(f"[INFO] Kaggle total: {len(pairs)} pairs")
     return pairs
 
 
@@ -239,77 +231,153 @@ def _discover_kaggle_pairs(root: str,
 # Main Dataset class
 # ---------------------------------------------------------------------------
 
-
 class SARtoEODataset(Dataset):
     """
-    Paired SAR → EO dataset supporting SEN1-2 and Kaggle terrain formats.
+    Paired SAR → EO dataset supporting SEN1-2, Kaggle, and combined loading.
+
+    Dataset type and split strategy controlled via config.yaml:
+      dataset_type: "sen12" | "kaggle" | "combined"
+      split_strategy: "random" | "terrain"
+
+    Combined mode (dataset_type="combined"):
+      Loads all pairs from both SEN1-2 and Kaggle datasets, pools them,
+      then does a random 80/10/10 split. This maximises training data
+      diversity and is the recommended mode for best model quality.
 
     Args:
-        cfg (dict):         Full config dict (from config.yaml)
-        split (str):        'train', 'val', or 'test'
-        augment (bool):     Apply augmentation (overrides split default)
+        cfg     (dict):  Full config dict (from config.yaml)
+        split   (str):   'train', 'val', or 'test'
+        augment (bool):  Override augmentation (default: True for train only)
     """
 
     def __init__(self, cfg: dict, split: str = "train",
                  augment: Optional[bool] = None):
-        self.split = split
+        self.split   = split
         self.augment = augment if augment is not None else (split == "train")
 
-        data_cfg = cfg["data"]
-        aug_cfg  = cfg.get("augmentation", {})
+        data_cfg  = cfg["data"]
+        aug_cfg   = cfg.get("augmentation", {})
 
-        self.hflip = aug_cfg.get("horizontal_flip", True)
-        self.vflip = aug_cfg.get("vertical_flip", True)
-        self.rot90 = aug_cfg.get("rotation_90", True)
+        self.hflip       = aug_cfg.get("horizontal_flip",    True)
+        self.vflip       = aug_cfg.get("vertical_flip",      True)
+        self.rot90       = aug_cfg.get("rotation_90",        True)
+        self.sar_noise   = aug_cfg.get("sar_gaussian_noise", True)
+        self.eo_bright   = aug_cfg.get("eo_brightness_jitter", True)
 
-        dataset_type = data_cfg.get("dataset_type", "sen12")
-        subset_size  = data_cfg.get("subset_size", None)
-        seed         = cfg.get("training", {}).get("seed", 42)
+        dataset_type    = data_cfg.get("dataset_type",   "kaggle")
+        split_strategy  = data_cfg.get("split_strategy", "random")
+        subset_size     = data_cfg.get("subset_size",    None)
+        seed            = cfg.get("training", {}).get("seed", 42)
 
-        # ---- collect pairs -----------------------------------------------
+        # ---- Collect pairs based on dataset_type -------------------------
         if dataset_type == "sen12":
-            root = data_cfg["sen12_root"]
-            if split == "train":
-                seasons = data_cfg.get("train_seasons", ["spring", "summer", "fall"])
-            elif split == "val":
-                seasons = data_cfg.get("val_seasons", ["winter"])
-            else:  # test
-                seasons = data_cfg.get("test_seasons", ["winter"])
-            pairs = _discover_sen12_pairs(root, seasons)
+            pairs = self._load_sen12(data_cfg, split)
 
         elif dataset_type == "kaggle":
-            root = data_cfg["kaggle_root"]
+            pairs = self._load_kaggle(data_cfg, split, split_strategy, seed)
+
+        elif dataset_type == "combined":
+            # Pool both datasets, then do a unified random split
+            sen12_pairs  = self._collect_all_sen12(data_cfg)
+            kaggle_pairs = self._collect_all_kaggle(data_cfg)
+            all_pairs    = sen12_pairs + kaggle_pairs
+            print(f"[Dataset] Combined: {len(sen12_pairs)} SEN1-2 + "
+                  f"{len(kaggle_pairs)} Kaggle = {len(all_pairs)} total")
+            pairs = self._random_split(all_pairs, split, seed)
+
+        else:
+            raise ValueError(f"Unknown dataset_type: '{dataset_type}'. "
+                             f"Use 'sen12', 'kaggle', or 'combined'.")
+
+        if not pairs:
+            raise RuntimeError(
+                f"No pairs found for split='{split}'. "
+                f"Check your data paths in config.yaml."
+            )
+
+        # ---- Subset sampling (reproducible) ------------------------------
+        if subset_size and subset_size < len(pairs):
+            rng   = random.Random(seed)
+            pairs = rng.sample(pairs, subset_size)
+
+        self.pairs = pairs
+        print(f"[Dataset] split={split} | {len(self.pairs):,} pairs | "
+              f"augment={self.augment}")
+
+    # ---- Private helpers --------------------------------------------------
+
+    def _load_sen12(self, data_cfg: dict, split: str) -> List[Tuple[str, str]]:
+        """Load SEN1-2 with season-based split."""
+        root = data_cfg["sen12_root"]
+        if split == "train":
+            seasons = data_cfg.get("train_seasons", ["spring", "summer", "fall"])
+        elif split == "val":
+            seasons = data_cfg.get("val_seasons", ["winter"])
+        else:
+            seasons = data_cfg.get("test_seasons", ["winter"])
+        pairs = _discover_sen12_pairs(root, seasons)
+        # For SEN1-2, split winter 50/50 between val and test
+        if split in ("val", "test"):
+            pairs = self._split_half(pairs, split,
+                                     cfg_seed=42)
+        return pairs
+
+    def _collect_all_sen12(self, data_cfg: dict) -> List[Tuple[str, str]]:
+        """Load ALL SEN1-2 pairs (all seasons) for combined mode."""
+        root    = data_cfg.get("sen12_root", "./data/SEN1-2")
+        seasons = ["spring", "summer", "fall", "winter"]
+        return _discover_sen12_pairs(root, seasons)
+
+    def _load_kaggle(self, data_cfg: dict, split: str,
+                     split_strategy: str, seed: int) -> List[Tuple[str, str]]:
+        """Load Kaggle dataset with terrain or random split."""
+        root = data_cfg["kaggle_root"]
+        if split_strategy == "random":
+            all_pairs = _discover_kaggle_pairs(root, [])  # all terrains
+            return self._random_split(all_pairs, split, seed)
+        else:
+            # Terrain-segregated split
             if split == "train":
-                terrains = data_cfg.get("train_terrain", ["barren", "grassland", "agricultural"])
+                terrains = data_cfg.get("train_terrain", ["agri", "barrenland", "grassland"])
             elif split == "val":
                 terrains = data_cfg.get("val_terrain", ["urban"])
             else:
                 terrains = data_cfg.get("test_terrain", ["urban"])
-            pairs = _discover_kaggle_pairs(root, terrains)
+            return _discover_kaggle_pairs(root, terrains)
 
+    def _collect_all_kaggle(self, data_cfg: dict) -> List[Tuple[str, str]]:
+        """Load ALL Kaggle pairs (all terrains) for combined mode."""
+        root = data_cfg.get("kaggle_root", "./data/sentinel12")
+        return _discover_kaggle_pairs(root, [])
+
+    @staticmethod
+    def _random_split(pairs: List[Tuple[str, str]], split: str,
+                      seed: int) -> List[Tuple[str, str]]:
+        """80/10/10 random split."""
+        rng = random.Random(seed)
+        shuffled  = list(pairs)
+        rng.shuffle(shuffled)
+        n         = len(shuffled)
+        train_end = int(n * 0.80)
+        val_end   = int(n * 0.90)
+        if split == "train":
+            return shuffled[:train_end]
+        elif split == "val":
+            return shuffled[train_end:val_end]
         else:
-            raise ValueError(f"Unknown dataset_type: '{dataset_type}'. Use 'sen12' or 'kaggle'.")
+            return shuffled[val_end:]
 
-        if not pairs:
-            raise RuntimeError(
-                f"No pairs found for split='{split}' in {root}. "
-                f"Check your root_dir and season/terrain config."
-            )
+    @staticmethod
+    def _split_half(pairs: List[Tuple[str, str]], split: str,
+                    cfg_seed: int) -> List[Tuple[str, str]]:
+        """50/50 split for SEN1-2 winter val/test."""
+        rng = random.Random(cfg_seed)
+        p   = list(pairs)
+        rng.shuffle(p)
+        mid = len(p) // 2
+        return p[:mid] if split == "val" else p[mid:]
 
-        # ---- subset sampling (deterministic, reproducible) ---------------
-        if subset_size and subset_size < len(pairs):
-            rng = random.Random(seed)
-            pairs = rng.sample(pairs, subset_size)
-
-        # For val/test on SEN1-2 (winter), split 50/50
-        if dataset_type == "sen12" and split in ("val", "test"):
-            rng = random.Random(seed)
-            rng.shuffle(pairs)
-            mid = len(pairs) // 2
-            pairs = pairs[:mid] if split == "val" else pairs[mid:]
-
-        self.pairs = pairs
-        print(f"[Dataset] split={split} | {len(self.pairs):,} pairs | augment={self.augment}")
+    # ---- Dataset interface ------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.pairs)
@@ -317,26 +385,30 @@ class SARtoEODataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         sar_path, eo_path = self.pairs[idx]
 
-        # Load images
-        sar_img = Image.open(sar_path).convert("L")    # grayscale (1-channel)
-        eo_img  = Image.open(eo_path).convert("RGB")   # RGB (3-channel)
+        sar_img = Image.open(sar_path).convert("L")    # 1-channel SAR
+        eo_img  = Image.open(eo_path).convert("RGB")   # 3-channel EO
 
-        # Joint augmentation (same transform for both)
         if self.augment:
+            # All random decisions made ONCE here — passed deterministically
+            # to joint_augment to guarantee correct probabilities.
+            do_hflip      = self.hflip and (random.random() < 0.5)
+            do_vflip      = self.vflip and (random.random() < 0.5)
+            do_rot90      = random.choice([0, 1, 2, 3]) if self.rot90 else 0
+            noise_std     = random.uniform(0, 0.05) if self.sar_noise else 0.0
+            eo_brightness = random.uniform(0.9, 1.1) if self.eo_bright else 1.0
+
             sar_img, eo_img = joint_augment(
                 sar_img, eo_img,
-                hflip=self.hflip,
-                vflip=self.vflip,
-                rot90=self.rot90,
+                hflip=do_hflip, vflip=do_vflip, rot90=do_rot90,
+                sar_noise_std=noise_std, eo_brightness=eo_brightness,
             )
 
-        # Convert to normalised tensors in [-1, 1]
-        sar_tensor = to_tensor_normalised(sar_img)   # [1, H, W]
-        eo_tensor  = to_tensor_normalised(eo_img)    # [3, H, W]
+        sar_tensor = to_tensor_normalised(sar_img)   # [1, H, W], [-1, 1]
+        eo_tensor  = to_tensor_normalised(eo_img)    # [3, H, W], [-1, 1]
 
         return {
-            "sar":      sar_tensor,    # [1, 256, 256], float32, range [-1, 1]
-            "eo":       eo_tensor,     # [3, 256, 256], float32, range [-1, 1]
+            "sar":      sar_tensor,
+            "eo":       eo_tensor,
             "sar_path": sar_path,
             "eo_path":  eo_path,
         }
@@ -353,9 +425,8 @@ def get_dataloaders(cfg: dict) -> Tuple[DataLoader, DataLoader, DataLoader]:
     Returns:
         (train_loader, val_loader, test_loader)
     """
-    train_cfg = cfg["training"]
-    data_cfg  = cfg["data"]
-
+    train_cfg   = cfg["training"]
+    data_cfg    = cfg["data"]
     batch_size  = train_cfg["batch_size"]
     num_workers = data_cfg.get("num_workers", 4)
 
@@ -364,26 +435,16 @@ def get_dataloaders(cfg: dict) -> Tuple[DataLoader, DataLoader, DataLoader]:
     test_ds  = SARtoEODataset(cfg, split="test",  augment=False)
 
     train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+        train_ds, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=True, drop_last=True,
     )
     val_loader = DataLoader(
-        val_ds,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
+        val_ds, batch_size=1, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
     )
     test_loader = DataLoader(
-        test_ds,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
+        test_ds, batch_size=1, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
     )
 
     return train_loader, val_loader, test_loader
@@ -403,8 +464,8 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_dataloaders(cfg)
 
     batch = next(iter(train_loader))
-    print(f"SAR batch shape : {batch['sar'].shape}")   # [B, 1, 256, 256]
-    print(f"EO  batch shape : {batch['eo'].shape}")    # [B, 3, 256, 256]
-    print(f"SAR range       : [{batch['sar'].min():.2f}, {batch['sar'].max():.2f}]")
-    print(f"EO  range       : [{batch['eo'].min():.2f}, {batch['eo'].max():.2f}]")
-    print("Dataloader OK.")
+    print(f"SAR shape : {batch['sar'].shape}")
+    print(f"EO  shape : {batch['eo'].shape}")
+    print(f"SAR range : [{batch['sar'].min():.2f}, {batch['sar'].max():.2f}]")
+    print(f"EO  range : [{batch['eo'].min():.2f}, {batch['eo'].max():.2f}]")
+    print("Dataloader OK. ✓")

@@ -1,237 +1,247 @@
 # SAR-to-EO Image Translation
-**GalaxEye Technical Assignment — AI Research Intern**
 
-> Given a Sentinel-1 SAR (VV) image, generate the corresponding Sentinel-2 optical (RGB) image.
-
----
-
-## Repository File Map
-
-| File | Purpose |
-|---|---|
-| `model.py` | Root-level shim — re-exports `UNetGenerator`, `PatchGANDiscriminator`, all losses |
-| `dataloader.py` | Root-level shim — re-exports `SARtoEODataset`, `get_dataloaders` |
-| `train.py` | Training loop with mixed precision, LR decay, checkpointing |
-| `eval.py` | Evaluation — runs inference + computes LPIPS/FID/SSIM/PSNR |
-| `infer.py` | Inference per GalaxEye I/O contract |
-| `config.yaml` | All hyperparameters (LR, batch, epochs, losses, seed, augmentation) |
-| `requirements.txt` | Pinned dependencies |
-| `models/generator.py` | U-Net generator (8 encoder + 8 decoder + skip connections) |
-| `models/discriminator.py` | 70×70 PatchGAN discriminator |
-| `models/losses.py` | L1, GAN, FFT frequency, VGG perceptual losses |
-| `data/dataloader.py` | Full dataset implementation (SEN1-2 + Kaggle terrain-split) |
-| `utils/metrics.py` | LPIPS, FID, SSIM, PSNR computation |
-| `utils/visualize.py` | Loss curve plots + SAR/EO/GT triplet grids |
-| `kaggle_train.ipynb` | End-to-end training notebook for Kaggle T4 GPU |
+> Generating Sentinel-2 optical imagery from Sentinel-1 SAR (VV) using a pretrained ResNet50-UNet with CBAM attention and multi-scale adversarial training.
 
 ---
 
-## Approach
+## Overview
 
-This project implements a **Pix2Pix-based conditional GAN** with a non-standard loss stack designed to directly target the primary evaluation metrics (LPIPS ↓, FID ↓):
+This project implements a high-quality SAR-to-EO image translation pipeline.
+Given a single-channel Sentinel-1 SAR (VV) patch, the model generates a plausible
+Sentinel-2 RGB optical image of the same scene.
 
-| Loss Component | Motivation |
-|---|---|
-| **L1** | Pixel-level accuracy, colour consistency |
-| **Adversarial (PatchGAN)** | Sharpness and realism |
-| **FFT Frequency Loss** | Motivated by SAR speckle physics — forces correct high-frequency texture, which L1 alone averages out |
-| **VGG Perceptual Loss** | LPIPS is implemented using pretrained network features; training with VGG loss directly optimises the evaluation metric |
+**Architecture highlights:**
+- **ResNet50-UNet generator** — pretrained ImageNet encoder (1-channel adapted) + CBAM skip attention + bilinear upsample decoder
+- **Multi-scale PatchGAN discriminator** — 3 independent PatchGANs at 1×, 0.5×, 0.25× resolution
+- **5-component loss stack** — L1 + FFT frequency + VGG perceptual + MS-SSIM + adversarial
+- **EMA model weights** — shadow generator averages training noise → stable inference
+- **Test-time augmentation** — optional 4-rotation ensemble for better inference quality
 
-### Ablation Configurations
+---
 
-| Config | Loss | Purpose |
-|---|---|---|
-| A | L1 only | Baseline |
-| B | L1 + Adversarial | + GAN |
-| C | L1 + Adversarial + FFT | + Frequency domain |
-| **D (main)** | **L1 + Adversarial + FFT + VGG** | **Full model** |
+## Repository Structure
+
+```
+sar2eo/
+├── models/
+│   ├── generator.py      ResNet50-UNet + CBAM generator
+│   ├── discriminator.py  Multi-scale (3×) PatchGAN discriminator
+│   ├── losses.py         L1, GAN, FFT, VGG, MS-SSIM losses
+│   └── attention.py      CBAM module (channel + spatial attention)
+├── data/
+│   └── dataloader.py     SEN1-2 + Kaggle combined dataset loader
+├── utils/
+│   ├── metrics.py        LPIPS, FID, SSIM, PSNR computation
+│   ├── visualize.py      Loss curves + SAR/EO/GT triplet grids
+│   └── ema.py            EMA wrapper for generator weights
+├── train.py              Training loop (EMA, cosine warmup, grad clip)
+├── eval.py               Evaluation (metrics + TTA option)
+├── infer.py              Inference (strict I/O contract, TTA flag)
+├── config.yaml           All hyperparameters
+├── requirements.txt      Pinned dependencies
+└── kaggle_train.ipynb    Kaggle training notebook
+```
+
+---
+
+## Architecture
+
+### Generator — ResNet50-UNet + CBAM
+
+```
+Input: [B, 1, 256, 256] SAR (VV)
+                ↓
+        ResNet50 Encoder (pretrained ImageNet, 1-ch adapted)
+        ┌─────────────────────────────────────────┐
+        │ stem   → [B, 64,  128, 128]             │
+        │ layer1 → [B, 256,  64,  64]             │
+        │ layer2 → [B, 512,  32,  32]             │
+        │ layer3 → [B, 1024, 16,  16]             │
+        │ layer4 → [B, 2048,  8,   8]  bottleneck │
+        └─────────────────────────────────────────┘
+                ↓ channel projections (reduce VRAM)
+                ↓ CBAM on each skip (channel + spatial attention)
+        ┌─────────────────────────────────────────┐
+        │ Bilinear Upsample Decoder               │
+        │ d4: 512  + 512  → 512   [8→16]          │
+        │ d3: 512  + 256  → 256   [16→32]         │
+        │ d2: 256  + 128  → 128   [32→64]         │
+        │ d1: 128  +  64  →  64   [64→128]        │
+        │ d0:  64  (no skip) → 32 [128→256]       │
+        └─────────────────────────────────────────┘
+                ↓ 1×1 conv + Tanh
+Output: [B, 3, 256, 256] EO (RGB)
+```
+
+**Why bilinear upsample over ConvTranspose2d:**
+ConvTranspose2d is known to produce checkerboard artefacts in generated images.
+Bilinear upsample followed by regular convolutions avoids this entirely.
+
+**Why CBAM on skip connections:**
+Not all ResNet50 features are relevant to SAR. CBAM channel attention suppresses
+irrelevant ImageNet filters (e.g. colour-sensitive detectors) and amplifies SAR-useful
+ones. Spatial attention focuses on informative regions (boundaries, structures) vs.
+diffuse speckle areas.
+
+### Discriminator — Multi-Scale PatchGAN
+
+3 independent 70×70 PatchGANs operating at different resolutions:
+- `D_0`: 256×256 — fine texture discrimination
+- `D_1`: 128×128 — medium-scale structure
+- `D_2`: 64×64  — global layout / coherence
+
+Loss averaged across scales. Forces the generator to be realistic at ALL scales
+simultaneously, not just the one the discriminator is tuned to.
+
+### Loss Stack
+
+| Loss | Weight | What it targets |
+|------|--------|----------------|
+| L1 | 100 | Pixel accuracy, colour fidelity, PSNR |
+| Adversarial (multi-scale) | 1 | Sharpness, texture realism, FID |
+| FFT Magnitude | 10 | High-frequency content (SAR speckle physics) |
+| VGG Perceptual | 10 | Semantic feature similarity, LPIPS |
+| MS-SSIM | 5 | Structural similarity at multiple scales, SSIM |
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- CUDA GPU (≥4 GB VRAM locally; ≤16 GB on Kaggle/Colab)
-- See `requirements.txt` for all pinned dependencies
-
----
-
-## Environment Setup
+- CUDA GPU (≥8 GB VRAM for training; ≥4 GB for inference)
+- Tested on Kaggle P100 (16 GB)
 
 ```bash
-# Clone the repository
-git clone https://github.com/Trafalgar-2006/sar2eo.git
-cd sar2eo
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate       # Linux/Mac
-# OR
-venv\Scripts\activate          # Windows
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ---
 
-## Dataset Structure
+## Dataset
 
-This project uses the **SEN1-2** dataset (CC-BY 4.0) from TU Munich and/or the **Kaggle Sentinel-1&2 terrain-split** dataset.
+### SEN1-2 (TU Munich, CC-BY 4.0)
 
-### Option 1: SEN1-2
-Download via rsync (password: `m1436631`):
 ```bash
 rsync -avz rsync://m1436631@dataserv.ub.tum.de/m1436631/ ./data/SEN1-2/
+# Password: m1436631
 ```
 
-Expected directory layout:
 ```
 data/SEN1-2/
 ├── ROIs1158_spring/
-│   ├── s1_1/          ← SAR grayscale PNGs
-│   └── s2_1/          ← EO RGB PNGs
+│   ├── s1_1/    ← SAR grayscale PNGs
+│   └── s2_1/    ← EO RGB PNGs
 ├── ROIs1868_summer/
 ├── ROIs1970_fall/
 └── ROIs2017_winter/
 ```
 
-### Option 2: Kaggle Terrain-Split
-Download from [Kaggle](https://www.kaggle.com/datasets/requiemonk/sentinel12-image-pairs-segregated-by-terrain) and place:
+### Kaggle Sentinel-1&2 Terrain Dataset
+
+Download from [Kaggle](https://www.kaggle.com/datasets/requiemonk/sentinel12-image-pairs-segregated-by-terrain):
+
 ```
 data/sentinel12/
-├── agri/
-│   ├── s1/   ← SAR PNGs
-│   └── s2/   ← EO PNGs
-├── barrenland/
-├── grassland/
-└── urban/
+├── agri/        ├── s1/  └── s2/
+├── barrenland/  ├── s1/  └── s2/
+├── grassland/   ├── s1/  └── s2/
+└── urban/       ├── s1/  └── s2/
 ```
 
-Update `config.yaml` → `data.dataset_type` to `"sen12"` or `"kaggle"` accordingly.
+### Combined mode (recommended)
 
-**Train/Val/Test Split:**
-- **SEN1-2**: Split by season — spring+summer+fall=train, winter=val/test (prevents adjacent-patch leakage)
-- **Kaggle**: Split by terrain — agri+barrenland+grassland=train, urban=val/test (hardest terrain class held out)
+Set `data.dataset_type: "combined"` in `config.yaml` to pool both datasets
+and use a random 80/10/10 split. This gives the most diverse training set.
 
 ---
 
 ## Training
 
 ```bash
-# Train the full model (Config D — recommended)
+# Full model (recommended)
 python train.py --config config.yaml
 
-# Train a specific ablation config
-python train.py --config config.yaml --ablation l1_only     # Config A
-python train.py --config config.yaml --ablation l1_adv      # Config B
-python train.py --config config.yaml --ablation l1_adv_fft  # Config C
-python train.py --config config.yaml --ablation full        # Config D
+# Specific ablation
+python train.py --config config.yaml --ablation full
+python train.py --config config.yaml --ablation l1_only
 ```
 
-Training logs per-epoch train/val loss to:
-- `outputs/loss_curve_{ablation}.png` — visual plot
-- `outputs/losses_{ablation}.csv` — raw values (reproducible)
+**Kaggle training** — clone repo, mount datasets, run:
+```python
+!git clone https://github.com/Trafalgar-2006/sar2eo.git
+%cd sar2eo
+!pip install -r requirements.txt
+!python train.py --config config.yaml
+```
 
-Checkpoints saved to `checkpoints/{ablation}/`:
-- `best.pth` — best validation checkpoint
-- `epoch_N.pth` — periodic saves (every 10 epochs)
+**Checkpoints** saved to `checkpoints/{ablation}/`:
+- `best.pth` — best validation loss (EMA weights)
+- `epoch_N.pth` — periodic saves every 10 epochs
 - `final.pth` — last epoch
+
+**Logs** in `logs/{ablation}_steps.jsonl` — per-step losses (every 50 steps) for smooth curve plotting.
 
 ---
 
 ## Inference
-
-Conforms exactly to the GalaxEye I/O contract:
 
 ```bash
 python infer.py \
   --input_dir  <path/to/sar_patches> \
   --output_dir <path/to/eo_output>   \
   --weights    checkpoints/full/best.pth
+
+# With test-time augmentation (better quality, 4× slower):
+python infer.py --input_dir <...> --output_dir <...> --weights <...> --tta
 ```
 
-**Input:** Directory of 256×256 8-bit grayscale PNG, dB-scaled SAR (VV) patches  
-**Output:** Directory of 256×256 RGB PNG EO images, same filenames as inputs  
-**Constraints:** Single GPU ≤16 GB VRAM, no internet access required
-
-Optional flags:
-```bash
---model_config config.yaml   # Path to config (optional)
---device       cuda          # auto | cuda | cpu
---batch_size   8             # Reduce if OOM
-```
+**I/O contract:**
+- Input: 256×256 8-bit grayscale PNG, dB-scaled SAR (VV) patches
+- Output: 256×256 8-bit RGB PNG EO images, same filenames
 
 ---
 
 ## Evaluation
 
 ```bash
-# Auto-run inference + compute all metrics on test split
+# Auto-run inference + all metrics:
 python eval.py \
   --config  config.yaml \
   --weights checkpoints/full/best.pth \
   --split   test
 
-# Or evaluate from existing prediction directories
-python eval.py \
-  --pred_dir outputs/eval_preds/ \
-  --gt_dir   outputs/eval_gt/
+# With TTA:
+python eval.py --config config.yaml --weights checkpoints/full/best.pth --split test --tta
 ```
 
-Computes and saves to `outputs/metrics_{ablation}_{split}.csv`:
-
-| Metric | Type | Direction |
-|---|---|---|
-| LPIPS | Perceptual | ↓ lower is better |
-| FID | Perceptual | ↓ lower is better |
-| SSIM | Pixel-level | ↑ higher is better |
-| PSNR | Pixel-level | ↑ higher is better |
-
----
-
-## Model Weights
-
-Pre-trained weights (Config D — full model, trained on Kaggle T4 × 2):
-
-> **[Download weights (Google Drive ~218 MB)](https://drive.google.com/file/d/11Z9o2HNKBPfxBLpSTVbxkHFIMuoFBfBx/view?usp=sharing)**
-
-> ⚠️ This link is also in the Google Form submission. Weights are NOT in the ZIP.
-
-Place checkpoint at: `checkpoints/full/best.pth`
+Metrics computed:
+| Metric | Direction | Notes |
+|--------|-----------|-------|
+| LPIPS | ↓ lower | Learned perceptual similarity (AlexNet features) |
+| FID | ↓ lower | Fréchet Inception Distance (distribution-level) |
+| SSIM | ↑ higher | Structural similarity |
+| PSNR | ↑ higher | Peak signal-to-noise ratio |
 
 ---
 
 ## Results
 
-All configs evaluated on the **urban held-out test split (4,000 pairs)**.
+*To be updated after retraining with combined dataset + full architecture.*
 
-### Ablation Study — Test Split
+Expected improvements over baseline vanilla U-Net:
 
-| Config | Loss Function | LPIPS ↓ | FID ↓ | SSIM ↑ | PSNR ↑ |
-|---|---|---|---|---|---|
-| A: L1 only | L1 | 0.894 | 333.0 | 0.128 | 12.91 |
-| B: L1 + Adv | L1 + Adversarial | 0.626 | 317.1 | 0.083 | 12.02 |
-| C: L1 + Adv + FFT | L1 + Adv + FFT | 0.627 | 329.1 | 0.078 | 11.65 |
-| **D: Full (main)** | **L1 + Adv + FFT + VGG** | **0.615** | **277.9** | 0.073 | 12.22 |
-
-Key findings:
-- Adding adversarial loss (B vs A): LPIPS improves 30% (0.894 → 0.626), FID drops from 333 → 317
-- Adding VGG perceptual loss (D vs C): FID drops 15% (329 → 278) — largest single gain
-- Config D achieves best LPIPS and FID (primary metrics)
-- Classic pixel-perceptual tradeoff: L1-only (A) has highest SSIM/PSNR but worst LPIPS/FID
-
-### Training Loss Curve (Config D)
-
-![Loss Curve](outputs/loss_curve_full.png)
+| Model | SSIM ↑ | PSNR ↑ | LPIPS ↓ |
+|-------|--------|--------|---------|
+| Vanilla Pix2Pix U-Net (baseline) | 0.073 | 12.2 dB | 0.615 |
+| ResNet50-UNet + CBAM + Multi-scale D (this) | ~0.30–0.40 | ~16–18 dB | ~0.40–0.50 |
 
 ---
 
-## Citation / References
+## References
 
 **Datasets:**
 ```
-Schmitt, M. (2018). SEN1-2. Technical University of Munich. 
+Schmitt, M. (2018). SEN1-2. Technical University of Munich.
 https://doi.org/10.14459/2018mp1436631. CC-BY 4.0.
 
 Tiwari, P. (2021). Sentinel-1&2 Image Pairs (Kaggle).
@@ -243,39 +253,18 @@ https://www.kaggle.com/datasets/requiemonk/sentinel12-image-pairs-segregated-by-
 Isola et al. (2017). Image-to-Image Translation with Conditional Adversarial Networks.
 CVPR 2017. https://arxiv.org/abs/1611.07004
 
+Wang et al. (2018). High-Resolution Image Synthesis with Conditional GANs (pix2pixHD).
+CVPR 2018. https://arxiv.org/abs/1711.11585
+
+Woo et al. (2018). CBAM: Convolutional Block Attention Module.
+ECCV 2018. https://arxiv.org/abs/1807.06521
+
+He et al. (2016). Deep Residual Learning for Image Recognition.
+CVPR 2016. https://arxiv.org/abs/1512.03385
+
+Wang et al. (2003). Multi-scale structural similarity for image quality assessment.
+Asilomar 2003. https://doi.org/10.1109/ACSSC.2003.1292216
+
 Zhang et al. (2018). The Unreasonable Effectiveness of Deep Features as a Perceptual Metric.
 CVPR 2018. https://arxiv.org/abs/1801.03924
-
-Heusel et al. (2017). GANs Trained by a Two Time-Scale Update Rule Converge to a 
-Local Nash Equilibrium. NeurIPS 2017. https://arxiv.org/abs/1706.08500
 ```
-
----
-
-## Time & Resource Log
-
-| Phase | Time (approx) |
-|---|---|
-| Data exploration & literature survey | ~3 hrs |
-| Architecture design & implementation | ~5 hrs |
-| Debugging & Kaggle setup | ~3 hrs |
-| Training Config A — L1 only (100 epochs, T4) | ~1.6 hrs |
-| Training Config B — L1 + Adv (100 epochs, T4) | ~4 hrs |
-| Training Config C — L1 + Adv + FFT (100 epochs, T4) | ~4 hrs |
-| Training Config D — Full (100 epochs, T4) | ~7.5 hrs |
-| Evaluation & metric computation | ~2 hrs |
-| Report writing | ~4 hrs |
-| **Total** | **~34 hrs** |
-
-**Hardware:**
-- Training: Kaggle T4 GPU (16 GB VRAM), PyTorch 2.1.0 + CUDA 12.x
-- Mixed precision (fp16) via `torch.amp` — ~2× VRAM reduction
-- Inference verified on CPU (local)
-
----
-
-## Submission
-
-ZIP file submitted: `FirstName_LastName_GalaxEye.zip`  
-Contains: Technical report PDF, loss curves, qualitative triplet images, time log.  
-**Weights NOT in ZIP** — submitted via public link above.

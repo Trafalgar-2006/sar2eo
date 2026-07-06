@@ -1,27 +1,22 @@
 """
-model.py — GalaxEye Assignment submission shim
+model.py — Root-level shim
 
-The actual model implementation is split across:
-  models/generator.py    — UNetGenerator (U-Net with skip connections)
-  models/discriminator.py — PatchGANDiscriminator (70x70 PatchGAN)
-  models/losses.py       — L1Loss, GANLoss, FFTLoss, VGGPerceptualLoss
-
-This file re-exports both models from the top level to satisfy the
-assignment deliverable naming convention (model.py at repo root).
-
-Usage:
-    from model import UNetGenerator, PatchGANDiscriminator
+Re-exports the main model classes for convenience. Allows:
+    from model import UNetGenerator, MultiScaleDiscriminator
+instead of navigating into models/.
 """
 
-from models.generator import UNetGenerator
-from models.discriminator import PatchGANDiscriminator
-from models.losses import L1Loss, GANLoss, FFTLoss, VGGPerceptualLoss
+from models.generator     import UNetGenerator
+from models.discriminator import MultiScaleDiscriminator, PatchGANDiscriminator
+from models.losses        import (
+    L1Loss, GANLoss, FFTLoss, VGGPerceptualLoss, MSSSIMLoss
+)
+from models.attention     import CBAM, ChannelAttention, SpatialAttention
 
 __all__ = [
     "UNetGenerator",
+    "MultiScaleDiscriminator",
     "PatchGANDiscriminator",
-    "L1Loss",
-    "GANLoss",
-    "FFTLoss",
-    "VGGPerceptualLoss",
+    "L1Loss", "GANLoss", "FFTLoss", "VGGPerceptualLoss", "MSSSIMLoss",
+    "CBAM", "ChannelAttention", "SpatialAttention",
 ]

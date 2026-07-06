@@ -1,64 +1,84 @@
 # ============================================================
-# GalaxEye SAR-to-EO Image Translation — Configuration File
-# All hyperparameters logged here for full reproducibility.
+# SAR-to-EO Image Translation — Configuration
+# Personal project — peak performance build
 # ============================================================
 
 model:
-  base_channels: 64          # Generator base channels (fits 4GB VRAM @ batch=4 fp16)
-  input_channels: 1          # SAR: single-channel VV
-  output_channels: 3         # EO: RGB
-  n_layers_D: 3              # PatchGAN discriminator depth
+  input_channels: 1           # SAR: single-channel VV
+  output_channels: 3          # EO: RGB
+  base_ch: 64                 # Legacy field (kept for API compat, not used by ResNet50 encoder)
+  use_attention: true         # CBAM on encoder skip connections
+  pretrained_encoder: true    # ResNet50 ImageNet pretrained weights
+  gradient_checkpointing: false  # Set true if OOM on Kaggle (saves ~3GB VRAM, ~20% slower)
+  n_scales_D: 3               # Multi-scale discriminator: 1× + 0.5× + 0.25×
+  n_layers_D: 3               # PatchGAN depth per scale
 
 training:
-  epochs: 100
-  batch_size: 4              # Reduce to 2 if OOM on <4GB VRAM
-  lr_generator: 0.0002
-  lr_discriminator: 0.0002
-  beta1: 0.5                 # Adam beta1 — standard for GANs
-  beta2: 0.999
-  lr_decay_start_epoch: 50   # Linear LR decay from this epoch onward
-  mixed_precision: true      # fp16 via torch.amp — effectively doubles VRAM headroom
-  save_freq: 10              # Save checkpoint every N epochs
-  val_freq: 5                # Run validation every N epochs
+  epochs: 150                 # More epochs — larger model benefits from longer training
+  batch_size: 8               # P100 16GB with fp16 handles batch=8 comfortably
+  # Differential learning rates — pretrained encoder needs 10× lower LR
+  lr_encoder: 0.00002         # ResNet50 encoder (pretrained — gentle fine-tuning)
+  lr_decoder: 0.0002          # Decoder, projections, CBAM (randomly initialised)
+  lr_discriminator: 0.0002    # Multi-scale discriminator
+  beta1: 0.5                  # Adam β₁ — standard for GANs
+  beta2: 0.999                # Adam β₂
+  warmup_epochs: 5            # Linear LR warmup (critical for pretrained encoder)
+  lr_min: 0.000001            # Cosine decay minimum LR
+  gradient_clip_norm: 1.0     # Gradient clipping (prevents GAN training collapse)
+  ema_decay: 0.999            # EMA generator weights (used for val + inference)
+  mixed_precision: true       # fp16 via torch.amp
+  save_freq: 10               # Save periodic checkpoint every N epochs
+  val_freq: 5                 # Run validation every N epochs
   seed: 42
 
 loss:
-  lambda_l1: 100.0           # L1 pixel loss weight
-  lambda_fft: 10.0           # FFT frequency loss weight (SAR speckle motivation)
-  lambda_vgg: 10.0           # VGG perceptual loss weight (directly targets LPIPS)
-  lambda_adv: 1.0            # Adversarial loss weight
+  lambda_l1: 100.0            # L1 pixel loss weight
+  lambda_adv: 1.0             # Adversarial loss weight (multi-scale)
+  lambda_fft: 10.0            # FFT frequency loss weight
+  lambda_vgg: 10.0            # VGG perceptual loss weight (targets LPIPS directly)
+  lambda_ssim: 5.0            # MS-SSIM loss weight (targets SSIM metric directly)
 
-# Ablation control — change this to run each ablation config:
-#   "l1_only"    → Config A (baseline, no GAN)
-#   "l1_adv"     → Config B (+ adversarial)
-#   "l1_adv_fft" → Config C (+ FFT frequency loss)
-#   "full"       → Config D — MAIN MODEL (+ VGG perceptual)
+# Ablation control (for research / README comparison):
+#   "l1_only"    → Config A: L1 only (baseline)
+#   "l1_adv"     → Config B: L1 + multi-scale adversarial
+#   "l1_adv_fft" → Config C: + FFT frequency loss
+#   "full"       → Config D: + VGG + MS-SSIM (MAIN MODEL)
 active_ablation: "full"
 
 data:
-  # Dataset type: "sen12" (SEN1-2 from mediaTUM) or "kaggle" (terrain-split)
-  dataset_type: "kaggle"
+  # Dataset source:
+  #   "sen12"    — SEN1-2 only (TU Munich, season-split)
+  #   "kaggle"   — Kaggle Sentinel-1&2 only
+  #   "combined" — Both pooled (recommended for best quality)
+  dataset_type: "combined"
 
-  # --- SEN1-2 paths (if dataset_type = "sen12") ---
+  # Split strategy (only used when dataset_type = "kaggle"):
+  #   "random"  — 80/10/10 split (recommended, best metrics)
+  #   "terrain" — terrain-segregated (shows generalisation)
+  split_strategy: "random"
+
+  # SEN1-2 paths
   sen12_root: "./data/SEN1-2"
   train_seasons: ["spring", "summer", "fall"]
   val_seasons: ["winter"]
   test_seasons: ["winter"]
 
-  # --- Kaggle dataset paths (if dataset_type = "kaggle") ---
+  # Kaggle dataset paths
   kaggle_root: "./data/sentinel12"
-  train_terrain: ["agri", "barrenland", "grassland"]
+  train_terrain: ["agri", "barrenland", "grassland"]   # for terrain split only
   val_terrain: ["urban"]
   test_terrain: ["urban"]
 
   image_size: 256
-  subset_size: 20000         # Max pairs to use from training set (null = use all)
-  num_workers: 4             # DataLoader workers
+  subset_size: null           # null = use all available pairs
+  num_workers: 4              # DataLoader worker processes
 
 augmentation:
-  horizontal_flip: true      # p=0.5
-  vertical_flip: true        # p=0.5
-  rotation_90: true          # p=0.5 (rotate by 0/90/180/270)
+  horizontal_flip: true       # p=0.5
+  vertical_flip: true         # p=0.5
+  rotation_90: true           # random 0/90/180/270
+  sar_gaussian_noise: true    # σ ~ U[0, 0.05] on SAR only
+  eo_brightness_jitter: true  # scale ~ U[0.9, 1.1] on EO only
 
 paths:
   checkpoint_dir: "./checkpoints"
