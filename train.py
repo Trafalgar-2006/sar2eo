@@ -197,6 +197,24 @@ def train(cfg: dict):
     ablation = cfg.get("active_ablation", "full")
     use_gan  = ablation in ("l1_adv", "l1_adv_fft", "full")
 
+    # ---- Reproducibility: capture git commit + env at start ----------------
+    import subprocess as _sp
+    try:
+        _git_hash = _sp.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=_sp.DEVNULL
+        ).decode().strip()
+    except Exception:
+        _git_hash = "unknown"
+    _repr_meta = {
+        "git_commit": _git_hash,
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda if torch.cuda.is_available() else "cpu",
+        "seed": cfg["training"].get("seed", 42),
+        "ablation": ablation,
+    }
+    print(f"  Reproducibility: git={_git_hash} | torch={torch.__version__} | "
+          f"cuda={torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
+
     print(f"{'='*65}")
     print(f" SAR-to-EO Training — Peak Performance Build")
     print(f" Ablation : {ablation}")
@@ -466,9 +484,10 @@ def train(cfg: dict):
                 torch.save({
                     "epoch":    epoch,
                     "G":        G.state_dict(),
-                    "G_ema":    ema.state_dict(),   # EMA weights saved here
+                    "G_ema":    ema.state_dict(),
                     "D":        D.state_dict() if D else None,
                     "val_loss": val_loss,
+                    "meta":     _repr_meta,   # reproducibility
                 }, best_path)
                 print(f"  [Val] ✓ Best checkpoint saved → {best_path}")
 
@@ -484,6 +503,7 @@ def train(cfg: dict):
                 "optim_G":     optim_G.state_dict(),
                 "optim_D":     optim_D.state_dict() if optim_D else None,
                 "history":     history,
+                "meta":        _repr_meta,   # reproducibility
             }, ckpt_path)
             print(f"  [Ckpt] Saved → {ckpt_path}")
 
