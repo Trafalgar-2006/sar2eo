@@ -7,53 +7,56 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.eggs/
 
-# Virtual environments
+# Environments
+.env
+.venv
 venv/
 env/
-.env/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Dataset (large files — stored separately)
-data/SEN1-2/
-data/sentinel12/
-data/*.zip
-data/*.tar
-data/*.tgz
-
-# Checkpoints (large — shared via public link)
+# Training outputs (large, generated locally)
 checkpoints/
-
-# Generated outputs (except committed samples)
-outputs/eval_preds*/
-outputs/eval_gt*/
-outputs/test_audit/
-
-# Dev/audit scripts
-audit_check.py
-config_smoke.yaml
-
-# Logs
+outputs/
 logs/
+runs/
+wandb/
 
-# Smoke test config (auto-generated)
-config_smoke.yaml
-
-# Local inference test data (not in repo)
-test_inputs/
-test_outputs/
-
-# Training artifacts (weights on Google Drive, not GitHub)
-training_outputs/*.pth
+# Data (too large for git — download separately)
+data/
+*.h5
+*.hdf5
+*.tif
+*.tiff
 *.zip
+*.tar.gz
+
+# Model weights
+*.pth
+*.pt
+*.onnx
+*.bin
+
+# Jupyter artifacts
+.ipynb_checkpoints/
+*.ipynb
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+
+# Compiled assets
+*.so
+*.dylib
+*.dll
+
+# Gradio temp files
+gradio_cached_examples/
+flagged/
