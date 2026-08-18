@@ -162,15 +162,44 @@ data:
 ## Training
 
 ```bash
-# Phase 1 — GAN
+# Phase 1 — single model
 python train.py --config config.yaml
 
 # Phase 2 — Diffusion (run after Phase 1)
 python train_diffusion.py --config config.yaml
-
-# On Kaggle (single cell):
-exec(open("kaggle_train.py").read())
 ```
+
+**On Kaggle:** import `kaggle_phase1_train.ipynb`. It discovers the dataset,
+auto-resumes across the 12-hour session limit, and runs the leakage audit as a
+hard gate before training starts.
+
+### Ablation study
+
+Trains all four loss configurations under pinned-identical conditions — same
+seed, same scene-disjoint split, same epoch budget — then evaluates each on the
+same held-out test set and writes the comparison table.
+
+```bash
+# all four, detached (survives SSH disconnect)
+nohup python run_ablations.py --config config.yaml --epochs 150 \
+      --batch-size 16 > ablations.log 2>&1 &
+tail -f ablations.log
+
+# quick pilot before committing GPU time
+python run_ablations.py --epochs 5 --subset-size 200
+```
+
+| Config | Loss components |
+|--------|-----------------|
+| `l1_only` | L1 |
+| `l1_adv` | L1 + multi-scale adversarial |
+| `l1_adv_fft` | + FFT frequency loss |
+| `full` | + VGG perceptual + MS-SSIM (main model) |
+
+Safe to re-run: each config auto-resumes from its own checkpoints and finished
+configs are skipped. A config that fails (OOM, say) does not discard the others.
+Outputs land in `outputs/ablation_comparison.{csv,md,png}` — the markdown is
+paste-ready for the results table above.
 
 ---
 
