@@ -289,6 +289,15 @@ class ConditionalUNet(nn.Module):
 # Quick test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     model = ConditionalUNet()
     n = sum(p.numel() for p in model.parameters())
     print(f"ConditionalUNet params: {n:,}")

@@ -133,6 +133,15 @@ def deploy(weights_path: str, token: str, dry_run: bool = False):
 
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights",    required=True, help="Path to best.pth from Kaggle")
     parser.add_argument("--token",      required=True, help="HuggingFace write token")

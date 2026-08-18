@@ -35,7 +35,7 @@ def load_loss_csv(path: str) -> Dict[str, List[float]]:
     if not os.path.exists(path):
         return {}
     data = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             for k, v in row.items():
@@ -53,7 +53,7 @@ def load_loss_csv(path: str) -> Dict[str, List[float]]:
 def load_metrics_csv(path: str) -> Dict[str, float]:
     if not os.path.exists(path):
         return {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             return {k: float(v) for k, v in row.items() if k != "split"}
@@ -136,7 +136,7 @@ def plot_results(cfg: dict, compare_model: Optional[str] = None):
     # Per-terrain breakdown
     if os.path.exists(terrain_path):
         terrain_data = {}
-        with open(terrain_path) as f:
+        with open(terrain_path, encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 terrain_data[row["terrain"]] = {
                     "ssim":  float(row["ssim"]),
@@ -203,13 +203,22 @@ def plot_results(cfg: dict, compare_model: Optional[str] = None):
 
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config",  default="config.yaml")
     parser.add_argument("--compare", default=None,
                         help="Name of model to compare (e.g. diffusion_ldm)")
     args = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     plot_results(cfg, args.compare)

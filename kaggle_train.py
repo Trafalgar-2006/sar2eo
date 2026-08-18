@@ -123,7 +123,11 @@ config = {
     "active_ablation": "full",
     "data": {
         "dataset_type":   "kaggle",
-        "split_strategy": "random",
+        # "scene" groups patches by the scene they were tiled from. SEN1-2 cuts
+        # each scene on a stride grid, so neighbouring patches overlap on the
+        # ground — a per-patch split puts near-duplicates in train AND test and
+        # inflates every metric. Do not change this back to "random".
+        "split_strategy": "scene",
         "sen12_root":     "./data/SEN1-2",
         "train_seasons":  ["spring", "summer", "fall"],
         "val_seasons":    ["winter"],
@@ -151,7 +155,7 @@ config = {
 }
 
 CFG_PATH = f"{REPO}/config_kaggle.yaml"
-with open(CFG_PATH, "w") as f:
+with open(CFG_PATH, "w", encoding="utf-8") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 print(f"✓ Config written → {CFG_PATH}")
 
@@ -176,6 +180,38 @@ vram_used = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available()
 print(f"✓ VRAM (smoke test): {vram_used:.2f} GB")
 del G, D, out, disc
 torch.cuda.empty_cache()
+
+# ── 6.5 Leakage audit — MUST pass before spending GPU hours ───────────────
+# Verifies no source scene appears in more than one split. A failure here means
+# the test set contains ground the model trained on, so every metric is inflated.
+from data.dataloader import SARtoEODataset, _scene_key
+
+print("\n" + "="*60)
+print(" LEAKAGE AUDIT — scene overlap between splits")
+print("="*60)
+
+_audit_cfg = yaml.safe_load(open(CFG_PATH, encoding="utf-8"))
+_scenes = {}
+for _split in ("train", "val", "test"):
+    _ds = SARtoEODataset(_audit_cfg, split=_split, augment=False)
+    _scenes[_split] = {_scene_key(p[0]) for p in _ds.pairs}
+    print(f"  {_split:<6}: {len(_ds.pairs):>6,} patches from {len(_scenes[_split]):>4,} scenes")
+
+_leaked = False
+for _a, _b in [("train", "val"), ("train", "test"), ("val", "test")]:
+    _shared = _scenes[_a] & _scenes[_b]
+    print(f"  {_a:<6} vs {_b:<5}: {'OK' if not _shared else f'LEAK - {len(_shared)} shared scenes'}")
+    _leaked |= bool(_shared)
+
+if _leaked:
+    raise RuntimeError(
+        "Split is leaking — test scenes also appear in train. "
+        "Refusing to train: the resulting metrics would be meaningless. "
+        "Check that split_strategy is 'scene' in the config above."
+    )
+print("  PASSED - splits are scene-disjoint")
+print("="*60 + "\n")
+del _ds, _scenes
 
 # ── 7. TRAIN ─────────────────────────────────────────────────────────────
 from train import train, load_config, make_dirs

@@ -72,7 +72,7 @@ def set_seed(seed: int):
 
 
 def load_config(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -297,6 +297,9 @@ def train(cfg: dict):
     n_epochs  = train_cfg["epochs"]
     save_freq = train_cfg.get("save_freq", 10)
     val_freq  = train_cfg.get("val_freq", 5)
+    # Optional cap on epochs per invocation, for 12h-limited Kaggle sessions.
+    # None = run straight through to n_epochs.
+    session_limit = train_cfg.get("session_epoch_limit") or None
     ckpt_dir  = os.path.join(cfg["paths"]["checkpoint_dir"], ablation)
     out_dir   = cfg["paths"]["output_dir"]
     log_dir   = cfg["paths"]["log_dir"]
@@ -332,9 +335,38 @@ def train(cfg: dict):
             # Ensure G_ssim key exists (backward compat)
             if "G_ssim" not in history:
                 history["G_ssim"] = [0.0] * len(history["G_total"])
+
+        # Restore LR schedule position. Without this the scheduler restarts at
+        # step 0, so a resumed session re-runs warmup and cosine from the top —
+        # spiking the encoder LR back to full mid-training.
+        if ckpt.get("sched_G"):
+            sched_G.load_state_dict(ckpt["sched_G"])
+        if sched_D and ckpt.get("sched_D"):
+            sched_D.load_state_dict(ckpt["sched_D"])
+
+        # load_state_dict restores the schedule's position but does NOT write the
+        # LR back into the optimiser — param_groups still hold the values set
+        # when the scheduler was constructed (warmup start, ~1% of base). Push
+        # the restored LR through, or the first resumed epoch trains at ~2e-7.
+        for grp, lr in zip(optim_G.param_groups, sched_G.get_last_lr()):
+            grp["lr"] = lr
+        if sched_D is not None and optim_D is not None:
+            for grp, lr in zip(optim_D.param_groups, sched_D.get_last_lr()):
+                grp["lr"] = lr
+        if scaler_G and ckpt.get("scaler_G"):
+            scaler_G.load_state_dict(ckpt["scaler_G"])
+        if scaler_D and ckpt.get("scaler_D"):
+            scaler_D.load_state_dict(ckpt["scaler_D"])
+
+        # Restore the best-so-far val loss, otherwise the first validation of a
+        # resumed session overwrites best.pth with a worse checkpoint.
+        best_val_loss = ckpt.get("best_val_loss", float("inf"))
+
         global_step = ckpt.get("global_step", 0)
         start_epoch = ckpt["epoch"] + 1
-        print(f"[Resume] Resuming from epoch {start_epoch}/{n_epochs}")
+        print(f"[Resume] Resuming from epoch {start_epoch}/{n_epochs} "
+              f"| lr_enc={optim_G.param_groups[0]['lr']:.2e} "
+              f"| best_val={best_val_loss:.4f}")
     else:
         print(f"[Train] Starting from scratch")
 
@@ -409,7 +441,7 @@ def train(cfg: dict):
                                                         "G_fft", "G_vgg", "G_ssim"]},
                     "D_total": loss_D.item() if D else 0.0,
                 }
-                with open(step_log, "a") as f:
+                with open(step_log, "a", encoding="utf-8") as f:
                     f.write(json.dumps(log_entry) + "\n")
 
         # ---- Log epoch means -----------------------------------------------
@@ -444,7 +476,7 @@ def train(cfg: dict):
         import csv
         csv_path = os.path.join(out_dir, f"losses_{ablation}.csv")
         os.makedirs(out_dir, exist_ok=True)
-        with open(csv_path, "w", newline="") as csvf:
+        with open(csv_path, "w", newline="", encoding="utf-8") as csvf:
             writer = csv.writer(csvf)
             writer.writerow(["epoch"] + list(history.keys()))
             for i in range(len(history["G_total"])):
@@ -502,10 +534,44 @@ def train(cfg: dict):
                 "D":           D.state_dict() if D else None,
                 "optim_G":     optim_G.state_dict(),
                 "optim_D":     optim_D.state_dict() if optim_D else None,
+                # Scheduler/scaler state and best_val_loss are required for a
+                # clean multi-session resume — see the [Resume] block above.
+                "sched_G":     sched_G.state_dict(),
+                "sched_D":     sched_D.state_dict() if sched_D else None,
+                "scaler_G":    scaler_G.state_dict() if scaler_G else None,
+                "scaler_D":    scaler_D.state_dict() if scaler_D else None,
+                "best_val_loss": best_val_loss,
                 "history":     history,
                 "meta":        _repr_meta,   # reproducibility
             }, ckpt_path)
             print(f"  [Ckpt] Saved → {ckpt_path}")
+
+        # ---- Stop early if this session has run its quota -------------------
+        # Kaggle kills a session at 12h, so long runs are split across sessions.
+        # `epochs` stays at the true total (so the cosine schedule spans the
+        # whole run and does not jump when a later session resumes); this only
+        # caps how many epochs any single session executes.
+        if (session_limit and epoch < n_epochs
+                and (epoch - start_epoch + 1) >= session_limit):
+            if epoch % save_freq != 0:   # make sure this session's work survives
+                torch.save({
+                    "epoch": epoch, "global_step": global_step,
+                    "G": G.state_dict(), "G_ema": ema.state_dict(),
+                    "D": D.state_dict() if D else None,
+                    "optim_G": optim_G.state_dict(),
+                    "optim_D": optim_D.state_dict() if optim_D else None,
+                    "sched_G": sched_G.state_dict(),
+                    "sched_D": sched_D.state_dict() if sched_D else None,
+                    "scaler_G": scaler_G.state_dict() if scaler_G else None,
+                    "scaler_D": scaler_D.state_dict() if scaler_D else None,
+                    "best_val_loss": best_val_loss,
+                    "history": history, "meta": _repr_meta,
+                }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
+            print(f"\n[Session] Ran {session_limit} epoch(s) this session, "
+                  f"stopping at epoch {epoch}/{n_epochs}.")
+            print(f"[Session] Save this notebook's output, add it as an input "
+                  f"next session, and rerun to continue from epoch {epoch + 1}.")
+            return G
 
     # ---- Final checkpoint ---------------------------------------------------
     final_path = os.path.join(ckpt_dir, "final.pth")
@@ -530,6 +596,15 @@ def train(cfg: dict):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser(description="SAR-to-EO Training")
     parser.add_argument("--config",   type=str, default="config.yaml")
     parser.add_argument("--ablation", type=str, default=None,

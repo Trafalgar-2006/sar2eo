@@ -33,7 +33,7 @@ def _load_model():
     use_attn = True
 
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         m = cfg.get("model", {})
         in_ch    = m.get("input_channels",  1)
@@ -239,4 +239,13 @@ with gr.Blocks(css=CSS, theme=gr.themes.Soft()) as demo:
     """)
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     demo.launch(share=True, server_name="0.0.0.0")

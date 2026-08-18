@@ -179,6 +179,15 @@ class MultiScaleDiscriminator(nn.Module):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     D = MultiScaleDiscriminator(
         in_channels=1, out_channels=3, base_ch=64, n_layers=3, n_scales=3
     )

@@ -38,7 +38,7 @@ def export_onnx(
     device = torch.device("cpu")  # ONNX export always on CPU
 
     # ── Load config and model ────────────────────────────────────────────
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     from models.generator import UNetGenerator
@@ -126,6 +126,15 @@ def export_onnx(
 
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default="checkpoints/full/best.pth")
     parser.add_argument("--config",  default="config.yaml")

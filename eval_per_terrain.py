@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from tqdm import tqdm
 
-from data.dataloader import KaggleDataset
+from data.dataloader import SARtoEODataset
 from models.generator import UNetGenerator
 from utils.metrics import compute_ssim, compute_psnr, compute_lpips
 
@@ -82,15 +82,26 @@ def eval_per_terrain(cfg: dict, weights_path: str):
     data_cfg = cfg["data"]
     img_size = data_cfg.get("image_size", 256)
 
-    # ── Find terrain folders ──────────────────────────────────────────────
-    kaggle_root = cfg["paths"]["dataset_dir"]
-    terrain_dirs = sorted([
-        d for d in Path(kaggle_root).iterdir()
-        if d.is_dir() and not d.name.startswith(".")
-    ])
-    print(f"\nFound {len(terrain_dirs)} terrain classes:")
+    # ── Take the real test split, then bucket it by terrain ───────────────
+    # Deliberately NOT re-derived by slicing files here: the test set must be
+    # the same scene-disjoint split the model was held out from, or these
+    # numbers would be measured partly on training scenes.
+    test_ds = SARtoEODataset(cfg, split="test", augment=False)
+
+    def terrain_of(sar_path: str) -> str:
+        """Terrain is the directory above the s1/ folder: <root>/<terrain>/s1/x.png"""
+        parts = Path(sar_path).parts
+        return parts[-3] if len(parts) >= 3 else "unknown"
+
+    by_terrain = defaultdict(list)
+    for sar_path, eo_path in test_ds.pairs:
+        by_terrain[terrain_of(sar_path)].append((sar_path, eo_path))
+
+    terrain_dirs = sorted(by_terrain)
+    print(f"\nTest split: {len(test_ds.pairs):,} pairs across "
+          f"{len(terrain_dirs)} terrain class(es)")
     for t in terrain_dirs:
-        print(f"  {t.name}/")
+        print(f"  {t}: {len(by_terrain[t]):,} pairs")
 
     results = {}   # terrain → {"ssim": [...], "psnr": [...], "lpips": [...]}
     triplet_dir = os.path.join(cfg["paths"]["output_dir"], "triplets_per_terrain")
@@ -100,29 +111,14 @@ def eval_per_terrain(cfg: dict, weights_path: str):
     lpips_fn = compute_lpips.__self__ if hasattr(compute_lpips, "__self__") else None
 
     # ── Per-terrain loop ──────────────────────────────────────────────────
-    for terrain_dir in terrain_dirs:
-        terrain = terrain_dir.name
-
-        # Collect all SAR/EO pairs for this terrain (test split: last 10%)
-        s1_dir = terrain_dir / "s1"
-        s2_dir = terrain_dir / "s2"
-        if not (s1_dir.exists() and s2_dir.exists()):
-            print(f"  Skipping {terrain} — missing s1/ or s2/")
-            continue
-
-        s1_files = sorted(s1_dir.glob("*.png"))
-        s2_files = sorted(s2_dir.glob("*.png"))
-        n        = min(len(s1_files), len(s2_files))
-        n_test   = max(1, int(n * 0.10))
-        test_s1  = s1_files[-n_test:]
-        test_s2  = s2_files[-n_test:]
-
-        print(f"\n[{terrain}] Evaluating {n_test} test pairs ...")
+    for terrain in terrain_dirs:
+        pairs = by_terrain[terrain]
+        print(f"\n[{terrain}] Evaluating {len(pairs)} test pairs ...")
 
         ssims, psnrs, lpips_vals = [], [], []
         saved_triplet = False
 
-        for idx, (s1_path, s2_path) in enumerate(zip(test_s1, test_s2)):
+        for idx, (s1_path, s2_path) in enumerate(tqdm(pairs, desc=terrain, leave=False)):
             # Load and preprocess
             sar_pil = Image.open(s1_path).convert("L").resize((img_size, img_size), Image.LANCZOS)
             eo_pil  = Image.open(s2_path).convert("RGB").resize((img_size, img_size), Image.LANCZOS)
@@ -159,7 +155,7 @@ def eval_per_terrain(cfg: dict, weights_path: str):
             "ssim":  float(np.mean(ssims))  if ssims  else 0.0,
             "psnr":  float(np.mean(psnrs))  if psnrs  else 0.0,
             "lpips": float(np.mean(lpips_vals)) if lpips_vals else -1.0,
-            "n":     n_test,
+            "n":     len(pairs),
         }
 
         print(f"  SSIM={results[terrain]['ssim']:.4f}  "
@@ -186,7 +182,7 @@ def eval_per_terrain(cfg: dict, weights_path: str):
     # ── Save CSV ──────────────────────────────────────────────────────────
     out_dir  = cfg["paths"]["output_dir"]
     csv_path = os.path.join(out_dir, "metrics_per_terrain.csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["terrain","ssim","psnr","lpips","n"])
         writer.writeheader()
         for t, m in sorted(results.items()):
@@ -234,12 +230,21 @@ def eval_per_terrain(cfg: dict, weights_path: str):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config",  default="config.yaml")
     parser.add_argument("--weights", default="checkpoints/full/best.pth")
     args = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     eval_per_terrain(cfg, args.weights)

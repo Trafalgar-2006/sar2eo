@@ -63,7 +63,7 @@ def load_model(weights_path: str,
 
     if config_path and os.path.exists(config_path):
         import yaml
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         m = cfg.get("model", {})
         in_ch      = m.get("input_channels",       1)
@@ -254,6 +254,15 @@ def run_inference(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser(description="SAR-to-EO Inference")
     parser.add_argument("--input_dir",    required=True,
                         help="Directory of 256×256 8-bit PNG SAR patches")

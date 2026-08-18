@@ -71,7 +71,7 @@ def run_inference_to_dir(
     from data.dataloader import get_dataloaders
     from models.generator import UNetGenerator
 
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -167,7 +167,7 @@ def evaluate_dirs(pred_dir: str, gt_dir: str,
 
     import csv
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "w", newline="") as f:
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["split", "lpips", "fid", "ssim", "psnr"])
         writer.writerow([split, metrics["lpips"], metrics["fid"],
@@ -181,6 +181,15 @@ def evaluate_dirs(pred_dir: str, gt_dir: str,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser(description="SAR-to-EO Evaluation")
     parser.add_argument("--pred_dir",  type=str, default=None)
     parser.add_argument("--gt_dir",    type=str, default=None)
@@ -193,7 +202,7 @@ if __name__ == "__main__":
                         help="Use test-time augmentation during inference")
     args = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     ablation = cfg.get("active_ablation", "full")
 

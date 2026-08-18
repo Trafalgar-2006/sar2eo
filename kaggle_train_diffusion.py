@@ -92,7 +92,7 @@ cfg = {
 }
 
 CFG_PATH = "/kaggle/working/config_diffusion.yaml"
-with open(CFG_PATH, "w") as f:
+with open(CFG_PATH, "w", encoding="utf-8") as f:
     yaml.dump(cfg, f)
 print(f"✓ Config written: {CFG_PATH}")
 
@@ -121,7 +121,7 @@ print("="*60)
 
 from train_diffusion_ldm import train_ldm
 
-with open(CFG_PATH) as f:
+with open(CFG_PATH, encoding="utf-8") as f:
     loaded_cfg = yaml.safe_load(f)
 
 unet, sar_enc = train_ldm(loaded_cfg)

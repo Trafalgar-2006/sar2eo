@@ -24,7 +24,7 @@ USAGE:
   pip install diffusers transformers accelerate
 
   python train_diffusion_ldm.py --config config.yaml
-  # OR on Kaggle: exec(open("kaggle_train_diffusion.py").read())
+  # OR on Kaggle: exec(open("kaggle_train_diffusion.py", encoding="utf-8").read())
 
 EXPECTED: ~8-10hrs on T4, LPIPS ~0.28, FID ~80 (vs GAN ~0.45, ~180)
 """
@@ -411,7 +411,7 @@ def train_ldm(cfg: dict, resume_path: str = None):
               f"{elapsed:.1f}min elapsed | ETA {eta_h:.1f}h")
 
         # Incremental CSV write
-        with open(csv_path, "w", newline="") as f:
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
             import csv as _csv
             w = _csv.writer(f)
             w.writerow(["epoch", "train_loss", "val_loss"])
@@ -495,11 +495,20 @@ def train_ldm(cfg: dict, resume_path: str = None):
 
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
     args   = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     # Inject LDM diffusion defaults

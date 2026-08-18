@@ -55,10 +55,14 @@ data:
   #   "combined" — Both pooled (recommended for best quality)
   dataset_type: "combined"
 
-  # Split strategy (only used when dataset_type = "kaggle"):
-  #   "random"  — 80/10/10 split (recommended, best metrics)
-  #   "terrain" — terrain-segregated (shows generalisation)
-  split_strategy: "random"
+  # Split strategy (applies to "kaggle" and "combined"):
+  #   "scene"   — 80/10/10 grouped by source scene (RECOMMENDED — leak-free)
+  #   "terrain" — terrain-segregated (hardest split, shows generalisation)
+  #   "random"  — 80/10/10 over patches. LEAKS: SEN1-2 tiles each scene on a
+  #               stride grid, so adjacent patches (p265/p266) overlap on the
+  #               ground and land on both sides of the split. Inflates PSNR/SSIM.
+  #               Kept only to reproduce pre-fix numbers.
+  split_strategy: "scene"
 
   # SEN1-2 paths
   sen12_root: "./data/SEN1-2"

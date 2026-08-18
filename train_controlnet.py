@@ -18,7 +18,7 @@ Why this works so well:
   Result: photorealistic EO generation guided by SAR geometry.
 
 Run on Kaggle (single cell):
-  exec(open("kaggle_train_controlnet.py").read())
+  exec(open("kaggle_train_controlnet.py", encoding="utf-8").read())
 
 Requirements:
   pip install diffusers transformers accelerate
@@ -208,11 +208,20 @@ def train_controlnet(cfg: dict, resume_path: str = None):
 
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
     args   = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     # Inject ControlNet defaults if missing

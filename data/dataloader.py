@@ -7,8 +7,9 @@ Supports three dataset configurations:
   3. "combined" — Both datasets pooled together, random 80/10/10 split
 
 Split strategies:
-  "terrain" — agri+barren+grassland=train, urban=val/test (original, shows generalisation)
-  "random"  — pool all data, 80/10/10 random split (best metrics, portfolio-optimal)
+  "scene"   — group patches by source scene, then 80/10/10 (DEFAULT — leak-free)
+  "terrain" — agri+barren+grassland=train, urban=val/test (shows generalisation)
+  "random"  — 80/10/10 over individual patches (LEAKS on tiled data, see _scene_key)
 
 SAR Preprocessing:
   - Loaded as grayscale uint8 PNG [0, 255]
@@ -29,8 +30,9 @@ Augmentation (train only, correctly applied ONCE per sample):
 
 import os
 import random
+import re
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 from PIL import Image
@@ -97,6 +99,35 @@ def to_tensor_normalised(img: Image.Image) -> torch.Tensor:
     t = TF.to_tensor(img)   # [C, H, W], [0, 1]
     t = t * 2.0 - 1.0       # → [-1, 1]
     return t
+
+
+# ---------------------------------------------------------------------------
+# Scene grouping (leakage prevention)
+# ---------------------------------------------------------------------------
+
+# ROIs1970_fall_s1_13_p265.png → roi="ROIs1970_fall", scene="13", patch="265"
+_SCENE_RE = re.compile(r"(ROIs\d+_[A-Za-z]+)_s[12]_(\d+)_p\d+", re.IGNORECASE)
+
+
+def _scene_key(sar_path: str) -> str:
+    """
+    Return the source scene a patch was cut from, for use as a split group key.
+
+    SEN1-2 (and the Kaggle set derived from it) tile each large scene on a fixed
+    stride grid, so patches with neighbouring p-indices cover overlapping ground:
+    p265, p266 and p267 are the same field shifted by one stride step. Splitting
+    on individual patches therefore leaks — p265 trains the model and p266 tests
+    it — which inflates PSNR/SSIM without any real generalisation.
+
+    Grouping by scene keeps every tile of a scene on one side of the split.
+
+    Falls back to the parent directory for filenames that do not follow the
+    ROIs{id}_{season}_s{1,2}_{scene}_p{patch} convention.
+    """
+    m = _SCENE_RE.search(Path(sar_path).name)
+    if m:
+        return f"{m.group(1)}_scene{m.group(2)}"
+    return str(Path(sar_path).parent)
 
 
 # ---------------------------------------------------------------------------
@@ -237,11 +268,11 @@ class SARtoEODataset(Dataset):
 
     Dataset type and split strategy controlled via config.yaml:
       dataset_type: "sen12" | "kaggle" | "combined"
-      split_strategy: "random" | "terrain"
+      split_strategy: "scene" | "terrain" | "random"
 
     Combined mode (dataset_type="combined"):
       Loads all pairs from both SEN1-2 and Kaggle datasets, pools them,
-      then does a random 80/10/10 split. This maximises training data
+      then splits 80/10/10 by source scene. This maximises training data
       diversity and is the recommended mode for best model quality.
 
     Args:
@@ -283,7 +314,7 @@ class SARtoEODataset(Dataset):
             all_pairs    = sen12_pairs + kaggle_pairs
             print(f"[Dataset] Combined: {len(sen12_pairs)} SEN1-2 + "
                   f"{len(kaggle_pairs)} Kaggle = {len(all_pairs)} total")
-            pairs = self._random_split(all_pairs, split, seed)
+            pairs = self._dispatch_split(all_pairs, split, split_strategy, seed)
 
         else:
             raise ValueError(f"Unknown dataset_type: '{dataset_type}'. "
@@ -332,9 +363,9 @@ class SARtoEODataset(Dataset):
                      split_strategy: str, seed: int) -> List[Tuple[str, str]]:
         """Load Kaggle dataset with terrain or random split."""
         root = data_cfg["kaggle_root"]
-        if split_strategy == "random":
+        if split_strategy in ("scene", "random"):
             all_pairs = _discover_kaggle_pairs(root, [])  # all terrains
-            return self._random_split(all_pairs, split, seed)
+            return self._dispatch_split(all_pairs, split, split_strategy, seed)
         else:
             # Terrain-segregated split
             if split == "train":
@@ -350,10 +381,105 @@ class SARtoEODataset(Dataset):
         root = data_cfg.get("kaggle_root", "./data/sentinel12")
         return _discover_kaggle_pairs(root, [])
 
+    @classmethod
+    def _dispatch_split(cls, pairs: List[Tuple[str, str]], split: str,
+                        strategy: str, seed: int) -> List[Tuple[str, str]]:
+        """Route to the scene-disjoint or the legacy per-patch split."""
+        if strategy == "scene":
+            return cls._grouped_split(pairs, split, seed)
+        return cls._random_split(pairs, split, seed)
+
+    @staticmethod
+    def _grouped_split(pairs: List[Tuple[str, str]], split: str,
+                       seed: int) -> List[Tuple[str, str]]:
+        """
+        Scene-disjoint 80/10/10 split.
+
+        Assigns whole scenes rather than individual patches, so no scene spans
+        two splits and no test patch overlaps ground the model saw during
+        training. See _scene_key for why that matters.
+
+        Each scene goes to whichever split is currently furthest below its
+        target share. A plain "fill train to 80% then move on" pass would
+        overshoot on the scene that crosses the boundary and can leave val or
+        test empty, so val and test are seeded with one scene each first.
+
+        Split sizes land near 80/10/10 rather than exactly on it, since scenes
+        are indivisible and vary in patch count. The fewer scenes there are, the
+        coarser the approximation.
+        """
+        groups: Dict[str, List[Tuple[str, str]]] = {}
+        unparsed = 0
+        for pair in pairs:
+            key = _scene_key(pair[0])
+            if not _SCENE_RE.search(Path(pair[0]).name):
+                unparsed += 1
+            groups.setdefault(key, []).append(pair)
+
+        # Falling back to the directory key means the filenames carry no scene
+        # id. Splitting still cannot leak, but groups become terrain-sized and
+        # the ratio degrades, so surface it rather than silently proceeding.
+        if unparsed:
+            print(f"[Split] WARNING: {unparsed:,}/{len(pairs):,} paths have no "
+                  f"parseable scene id; grouped by directory instead, e.g.:")
+            for p, _ in pairs[:3]:
+                if not _SCENE_RE.search(Path(p).name):
+                    print(f"           {Path(p).name}  ->  {_scene_key(p)}")
+                    break
+            print("         Splits stay leak-free but sizes will be uneven.")
+
+        keys = sorted(groups)                 # sort first so seed alone decides
+        random.Random(seed).shuffle(keys)
+
+        if len(keys) < 3:
+            raise RuntimeError(
+                f"Only {len(keys)} scene group(s) found — cannot build three "
+                f"disjoint splits. Either the dataset is tiny or _scene_key "
+                f"could not distinguish scenes in these filenames."
+            )
+
+        n_total  = len(pairs)
+        targets  = {"train": 0.80 * n_total, "val": 0.10 * n_total, "test": 0.10 * n_total}
+        buckets: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
+
+        # Seed val and test with the two smallest scenes so neither starves and
+        # the distortion of holding them back stays minimal.
+        by_size = sorted(keys, key=lambda k: len(groups[k]))
+        for name, key in (("val", by_size[0]), ("test", by_size[1])):
+            buckets[name].extend(groups[key])
+
+        seeded = {by_size[0], by_size[1]}
+        for key in keys:
+            if key in seeded:
+                continue
+            # Whichever split is furthest below its target share takes it.
+            target = max(targets, key=lambda s: targets[s] - len(buckets[s]))
+            buckets[target].extend(groups[key])
+
+        print(f"[Split] scene-disjoint | {len(groups):,} scenes -> "
+              f"train={len(buckets['train']):,} "
+              f"val={len(buckets['val']):,} "
+              f"test={len(buckets['test']):,}")
+
+        for name, items in buckets.items():
+            if not items:
+                raise RuntimeError(
+                    f"Split '{name}' came out empty from {len(groups)} scenes. "
+                    f"Too few scenes to split three ways."
+                )
+        return buckets[split]
+
     @staticmethod
     def _random_split(pairs: List[Tuple[str, str]], split: str,
                       seed: int) -> List[Tuple[str, str]]:
-        """80/10/10 random split."""
+        """
+        80/10/10 split over individual patches.
+
+        WARNING: leaks on tiled data. Adjacent tiles from one scene overlap on
+        the ground, so shuffling patches puts near-duplicates on both sides of
+        the split and inflates every metric. Kept only for reproducing older
+        numbers — prefer "scene". See _scene_key.
+        """
         rng = random.Random(seed)
         shuffled  = list(pairs)
         rng.shuffle(shuffled)
@@ -455,10 +581,19 @@ def get_dataloaders(cfg: dict) -> Tuple[DataLoader, DataLoader, DataLoader]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     import yaml, sys
 
     cfg_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
-    with open(cfg_path) as f:
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     train_loader, val_loader, test_loader = get_dataloaders(cfg)
@@ -468,4 +603,21 @@ if __name__ == "__main__":
     print(f"EO  shape : {batch['eo'].shape}")
     print(f"SAR range : [{batch['sar'].min():.2f}, {batch['sar'].max():.2f}]")
     print(f"EO  range : [{batch['eo'].min():.2f}, {batch['eo'].max():.2f}]")
-    print("Dataloader OK. ✓")
+
+    # ---- Leakage audit: no scene may appear in more than one split --------
+    scenes = {
+        name: {_scene_key(p[0]) for p in loader.dataset.pairs}
+        for name, loader in [("train", train_loader),
+                             ("val",   val_loader),
+                             ("test",  test_loader)]
+    }
+    print("\n--- Leakage audit (scene overlap between splits) ---")
+    leaked = False
+    for a, b in [("train", "val"), ("train", "test"), ("val", "test")]:
+        shared = scenes[a] & scenes[b]
+        status = "OK" if not shared else f"LEAK - {len(shared)} shared scenes"
+        print(f"  {a:<6} vs {b:<5} : {status}")
+        leaked |= bool(shared)
+
+    print("\nDataloader OK - splits are scene-disjoint." if not leaked else
+          "\nDataloader LEAKING - set split_strategy: \"scene\" in config.yaml.")

@@ -57,15 +57,45 @@ Fine-tune Clay or Prithvi geospatial foundation models with ControlNet-style SAR
 
 ---
 
+## Evaluation protocol
+
+**All splits are scene-disjoint.** This matters more than it sounds.
+
+SEN1-2 does not contain independent images — it tiles each large scene on a
+fixed **stride** grid, so patches with neighbouring indices overlap on the
+ground. `ROIs1970_fall_s1_13_p265`, `p266` and `p267` are the same field shifted
+one step at a time. Splitting on individual patches puts near-duplicates in both
+train and test, and the model is then scored on pixels it memorised:
+
+| Split strategy | Test scenes also seen in training |
+|----------------|-----------------------------------|
+| `random` (per-patch) | **100%** |
+| `scene` (default) | **0%** |
+
+`data/dataloader.py` groups patches by source scene before splitting, and
+`python data/dataloader.py config.yaml` runs a leakage audit that fails loudly
+if any scene spans two splits. The Kaggle notebook runs the same audit as a hard
+gate before training starts.
+
+Set via `split_strategy` in `config.yaml`:
+
+- `scene` — 80/10/10 grouped by source scene (**default**)
+- `terrain` — train on agri/barren/grassland, test on urban (hardest; measures cross-terrain generalisation)
+- `random` — per-patch. Leaks. Retained only to reproduce pre-fix numbers.
+
+---
+
 ## Results
 
 | Model | SSIM ↑ | PSNR ↑ | LPIPS ↓ | FID ↓ |
 |-------|--------|--------|---------|-------|
-| Vanilla Pix2Pix (baseline) | 0.073 | 12.2 dB | 0.615 | 278 |
-| **ResNet50-UNet GAN (Phase 1)** | *training* | *training* | *training* | *training* |
+| Vanilla Pix2Pix (terrain split, 2025 baseline) | 0.073 | 12.2 dB | 0.615 | 278 |
+| **ResNet50-UNet GAN (Phase 1)** — scene-disjoint | *training* | *training* | *training* | *training* |
 | Conditional Diffusion (Phase 2) | *planned* | — | — | — |
 
-*Results will be updated after training completes.*
+*Results will be updated after training completes. Numbers are reported on a
+scene-disjoint test split — see the evaluation protocol above. Figures from any
+per-patch split are not comparable to these and are not reported.*
 
 ---
 

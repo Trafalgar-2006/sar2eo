@@ -61,6 +61,28 @@ def _psnr_single(pred: torch.Tensor, target: torch.Tensor) -> float:
     return sk_psnr(t, p, data_range=1.0)
 
 
+def _chw01_to_numpy(t: torch.Tensor) -> np.ndarray:
+    """[C, H, W] tensor already in [0, 1] → [H, W, C] float numpy."""
+    return t.detach().cpu().float().clamp(0.0, 1.0).permute(1, 2, 0).numpy()
+
+
+def compute_ssim(pred: torch.Tensor, target: torch.Tensor) -> float:
+    """
+    SSIM for a single [C, H, W] pair **already scaled to [0, 1]**.
+
+    Note the range difference from _ssim_single, which takes network-space
+    [-1, 1] tensors. Callers holding (x + 1) / 2 outputs want this one.
+    """
+    return float(sk_ssim(_chw01_to_numpy(pred), _chw01_to_numpy(target),
+                         data_range=1.0, channel_axis=2))
+
+
+def compute_psnr(pred: torch.Tensor, target: torch.Tensor) -> float:
+    """PSNR for a single [C, H, W] pair **already scaled to [0, 1]**."""
+    return float(sk_psnr(_chw01_to_numpy(target), _chw01_to_numpy(pred),
+                         data_range=1.0))
+
+
 # ---------------------------------------------------------------------------
 # LPIPS (batch-level, uses pretrained network)
 # ---------------------------------------------------------------------------
@@ -175,6 +197,15 @@ def compute_metrics(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252 and raise on the unicode used in the
+    # progress output below. Force UTF-8 so local runs match Kaggle/Linux.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
     import torch
 
     # Random fake batch
