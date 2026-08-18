@@ -65,3 +65,6 @@ desktop.ini
 # Gradio temp files
 gradio_cached_examples/
 flagged/
+
+# Scratch artifacts
+_*.html
