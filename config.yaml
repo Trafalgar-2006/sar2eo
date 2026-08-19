@@ -9,6 +9,12 @@ model:
   base_ch: 64                 # Legacy field (kept for API compat, not used by ResNet50 encoder)
   use_attention: true         # CBAM on encoder skip connections
   pretrained_encoder: true    # ResNet50 ImageNet pretrained weights
+  # ResNet50's stem halves the input at once (256→128), so the shallowest
+  # encoder feature is 128×128 and the final 128→256 decoder step has nothing
+  # to concatenate — the finest detail gets interpolated rather than recovered.
+  # This adds a 3×3 conv over the raw input at full resolution as that skip.
+  # Costs ~9.6k params (0.03%). Set false to ablate it.
+  full_res_skip: true
   gradient_checkpointing: false  # Set true if OOM on Kaggle (saves ~3GB VRAM, ~20% slower)
   n_scales_D: 3               # Multi-scale discriminator: 1× + 0.5× + 0.25×
   n_layers_D: 3               # PatchGAN depth per scale

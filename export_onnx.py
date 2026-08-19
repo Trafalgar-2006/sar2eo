@@ -49,6 +49,7 @@ def export_onnx(
         base_ch=m.get("base_ch", 64),
         use_attention=m.get("use_attention", True),
         pretrained=False,
+        full_res_skip=m.get("full_res_skip", True),
     ).to(device)
 
     ckpt  = torch.load(weights_path, map_location=device, weights_only=False)

@@ -235,6 +235,7 @@ def train(cfg: dict):
         use_attention = model_cfg.get("use_attention", True),
         pretrained    = model_cfg.get("pretrained_encoder", True),
         gradient_checkpointing = model_cfg.get("gradient_checkpointing", False),
+        full_res_skip = model_cfg.get("full_res_skip", True),
     ).to(device)
     G.init_weights()   # initialises decoder/projections; encoder stays pretrained
 

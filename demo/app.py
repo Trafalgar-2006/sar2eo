@@ -57,6 +57,7 @@ def _load_model():
 
     in_ch = out_ch = base_ch = 1
     use_attn = True
+    full_skip = True
 
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -66,11 +67,13 @@ def _load_model():
         out_ch   = m.get("output_channels", 3)
         base_ch  = m.get("base_ch",        64)
         use_attn = m.get("use_attention", True)
+        full_skip = m.get("full_res_skip", True)
 
     G = UNetGenerator(
         in_channels=in_ch, out_channels=out_ch,
         base_ch=base_ch, use_attention=use_attn,
         pretrained=False,
+        full_res_skip=full_skip,
     ).to(DEVICE)
 
     weights_path = _first_existing(WEIGHTS_CANDIDATES, "Model weights")

@@ -84,6 +84,7 @@ def run_inference_to_dir(
         use_attention = m_cfg.get("use_attention", True),
         pretrained    = False,   # weights from checkpoint
         gradient_checkpointing = m_cfg.get("gradient_checkpointing", False),
+        full_res_skip = m_cfg.get("full_res_skip", True),
     ).to(device)
 
     ckpt = torch.load(weights_path, map_location=device, weights_only=False)

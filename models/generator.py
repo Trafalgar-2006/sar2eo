@@ -42,8 +42,13 @@ Architecture details:
     d3: up(d4=512)    → cat(proj2=256) → 256  [16→32]
     d2: up(d3=256)    → cat(proj1=128) → 128  [32→64]
     d1: up(d2=128)    → cat(proj0=64)  → 64   [64→128]
-    d0: up(d1=64)                      → 32   [128→256]
+    d0: up(d1=64)     → cat(stem_full=32) → 32  [128→256]
     out: 32→3, Tanh
+
+  stem_full: raw input → 32 ch at 256×256 (full_res_skip=True).
+  The encoder has no 256×256 feature map — ResNet50's stem halves the input
+  immediately — so without this the last upsample has no skip and the finest
+  octave of detail is interpolated rather than recovered.
 
 Input:  [B, 1, 256, 256]  — single-channel SAR (VV), range [-1, 1]
 Output: [B, 3, 256, 256]  — RGB EO image, range [-1, 1]
@@ -196,6 +201,22 @@ class UNetGenerator(nn.Module):
         use_attention(bool): Apply CBAM on skip connections (default True).
         pretrained   (bool): Load ImageNet weights for encoder (default True).
         gradient_checkpointing (bool): Trade compute for VRAM (default False).
+        full_res_skip (bool): Feed the raw input to the last decoder stage
+                             (default True). See below.
+
+    The full-resolution skip
+    ------------------------
+    ResNet50's stem halves the input immediately (256→128 via a stride-2 conv),
+    so the shallowest encoder feature — and therefore the finest skip — lives at
+    128×128. The last decoder stage upsamples 128→256 with nothing to
+    concatenate, which means the top octave of detail (thin roads, building
+    edges, field boundaries) is *invented* by bilinear interpolation rather than
+    carried across from the input. That is a standard cause of soft output in
+    stride-heavy encoder-decoders.
+
+    Setting full_res_skip adds a cheap 3×3 conv over the raw input at full
+    resolution and concatenates it into that last stage, giving the decoder real
+    256×256 evidence to sharpen against. Costs ~600 params and one feature map.
     """
 
     def __init__(self,
@@ -204,9 +225,11 @@ class UNetGenerator(nn.Module):
                  base_ch:      int  = 64,    # kept for API compat, not used
                  use_attention: bool = True,
                  pretrained:    bool = True,
-                 gradient_checkpointing: bool = False):
+                 gradient_checkpointing: bool = False,
+                 full_res_skip: bool = True):
         super().__init__()
         self.use_attention = use_attention
+        self.full_res_skip = full_res_skip
 
         # ---- Encoder --------------------------------------------------------
         self.encoder = ResNet50Encoder(
@@ -221,6 +244,18 @@ class UNetGenerator(nn.Module):
         self.proj2 = _proj(512,  256)   # skip2
         self.proj1 = _proj(256,  128)   # skip1
         self.proj0 = _proj(64,    64)   # skip0 (stem)
+
+        # ---- Full-resolution skip taken straight from the input -------------
+        # The encoder has no 256×256 feature map, so this is the only route by
+        # which genuine full-resolution information reaches the final stage.
+        _FULL_SKIP_CH = 32
+        if full_res_skip:
+            self.stem_full = nn.Sequential(
+                nn.Conv2d(in_channels, _FULL_SKIP_CH, kernel_size=3,
+                          padding=1, bias=False),
+                nn.BatchNorm2d(_FULL_SKIP_CH),
+                nn.ReLU(inplace=True),
+            )
 
         # ---- CBAM attention on skip connections (after projection) ----------
         if use_attention:
@@ -239,7 +274,9 @@ class UNetGenerator(nn.Module):
         # d1: up(d2=128)    + cat(proj0=64)  → 64
         self.d1 = DecoderBlock(in_ch=128, skip_ch=64,  out_ch=64)
         # d0: up(d1=64), no skip (128→256)   → 32
-        self.d0 = DecoderBlock(in_ch=64,  skip_ch=0,   out_ch=32)
+        self.d0 = DecoderBlock(in_ch=64,
+                               skip_ch=_FULL_SKIP_CH if full_res_skip else 0,
+                               out_ch=32)
 
         # ---- Final output layer ----------------------------------------------
         self.out_conv = nn.Sequential(
@@ -285,8 +322,8 @@ class UNetGenerator(nn.Module):
         out = self.d2(out, skip=p1)    # [B, 128, 64, 64]
         # 64×64 → 128×128
         out = self.d1(out, skip=p0)    # [B,  64,128,128]
-        # 128×128 → 256×256 (no skip)
-        out = self.d0(out)             # [B,  32,256,256]
+        # 128×128 → 256×256, with the raw input as the only full-res evidence
+        out = self.d0(out, skip=self.stem_full(x) if self.full_res_skip else None)
 
         return self.out_conv(out)      # [B,   3,256,256], tanh → [-1, 1]
 

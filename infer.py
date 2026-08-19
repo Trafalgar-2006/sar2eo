@@ -60,6 +60,7 @@ def load_model(weights_path: str,
     use_attn = True
     pretrained = True   # architecture flag (weights loaded from checkpoint)
     grad_ck  = False
+    full_skip = True
 
     if config_path and os.path.exists(config_path):
         import yaml
@@ -71,6 +72,7 @@ def load_model(weights_path: str,
         base_ch    = m.get("base_ch",              64)
         use_attn   = m.get("use_attention",       True)
         grad_ck    = m.get("gradient_checkpointing", False)
+        full_skip  = m.get("full_res_skip",         True)
 
     G = UNetGenerator(
         in_channels  = in_ch,
@@ -79,6 +81,7 @@ def load_model(weights_path: str,
         use_attention= use_attn,
         pretrained   = False,       # weights come from checkpoint, not ImageNet
         gradient_checkpointing = grad_ck,
+        full_res_skip = full_skip,
     ).to(device)
 
     ckpt = torch.load(weights_path, map_location=device, weights_only=False)

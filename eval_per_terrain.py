@@ -47,6 +47,7 @@ def load_model(cfg: dict, weights_path: str, device: torch.device):
         base_ch=m.get("base_ch", 64),
         use_attention=m.get("use_attention", True),
         pretrained=False,
+        full_res_skip=m.get("full_res_skip", True),
     ).to(device)
     ckpt = torch.load(weights_path, map_location=device, weights_only=False)
     state = ckpt.get("G_ema") or ckpt.get("G") or ckpt
