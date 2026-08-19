@@ -225,7 +225,26 @@ python infer.py --input_dir ./sar_patches --output_dir ./eo_out --weights checkp
 python infer.py --input_dir ./sar_patches --output_dir ./eo_out --weights checkpoints/full/best.pth --tta
 ```
 
-**I/O contract:** 256×256 8-bit grayscale PNG SAR → 256×256 8-bit RGB PNG EO
+### Scenes larger than one tile
+
+The model is trained on 256×256 crops, but SAR scenes aren't that size. Images
+that aren't exactly one tile are handled automatically by striding a window
+across them and blending the overlaps:
+
+```bash
+# a full scene — no pre-cutting needed
+python infer.py --input-dir ./scenes --output-dir ./eo_out \
+       --weights checkpoints/full/best.pth --stride 128
+```
+
+`stride` is the step between windows. The default of 192 on a 256 tile gives
+25% overlap, blended with a raised-cosine window so no seam appears at the tile
+boundaries — a pixel at the edge of one tile was predicted with little context
+on that side, so it's weighted down in favour of the neighbouring tile that saw
+more. A smaller stride is smoother but costs `(tile/stride)²` forward passes.
+
+**I/O contract:** 8-bit grayscale PNG SAR → 8-bit RGB PNG EO, same dimensions
+in and out. Exactly 256×256 takes the fast batch path; anything else is tiled.
 
 ---
 
