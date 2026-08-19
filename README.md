@@ -182,12 +182,24 @@ same held-out test set and writes the comparison table.
 ```bash
 # all four, detached (survives SSH disconnect)
 nohup python run_ablations.py --config config.yaml --epochs 150 \
-      --batch-size 16 > ablations.log 2>&1 &
+      --batch-size 16 --num-workers 8 > ablations.log 2>&1 &
 tail -f ablations.log
 
 # quick pilot before committing GPU time
 python run_ablations.py --epochs 5 --subset-size 200
 ```
+
+| Flag | Purpose |
+|------|---------|
+| `--ablations` | Which configs, comma-separated. Default runs `full` first, so an interrupted study still yields the headline model |
+| `--epochs` `--batch-size` `--subset-size` | Override for **all** configs — pinned so the comparison stays fair |
+| `--num-workers` | DataLoader workers. The config default (4) is sized for Kaggle's 2-core boxes; on a workstation use about half your core count |
+| `--force` | Re-run configs that already have metrics |
+| `--allow-cpu` | Smoke-test the pipeline without booking GPU time |
+| `--skip-audit` | Skip the leakage gate (not recommended) |
+
+Flags accept either spelling — `--batch-size` and `--batch_size` both work,
+across every script in the repo.
 
 | Config | Loss components |
 |--------|-----------------|

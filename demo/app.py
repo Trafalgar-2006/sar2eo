@@ -17,12 +17,38 @@ import torch
 import gradio as gr
 
 # ── Path setup (works locally and on HuggingFace Spaces) ──────────────────
+# On a Space, deploy_to_hf.py flattens everything to the root, so app.py sits
+# beside checkpoints/ and config.yaml. In the repo it lives in demo/, one level
+# down, and training writes to checkpoints/<ablation>/. Search both layouts
+# rather than hard-coding one and failing on the other.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(ROOT)
 sys.path.insert(0, ROOT)
+sys.path.insert(0, REPO)
 
-WEIGHTS_PATH = os.path.join(ROOT, "checkpoints", "best.pth")
-CONFIG_PATH  = os.path.join(ROOT, "config.yaml")
-DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def _first_existing(candidates, what):
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(
+        f"{what} not found. Looked in:\n  " + "\n  ".join(candidates) +
+        "\n\nDownload best.pth from the Kaggle output and put it in "
+        "checkpoints/full/best.pth"
+    )
+
+
+WEIGHTS_CANDIDATES = [
+    os.path.join(ROOT, "checkpoints", "best.pth"),          # HF Space layout
+    os.path.join(REPO, "checkpoints", "full", "best.pth"),  # after local training
+    os.path.join(REPO, "checkpoints", "best.pth"),
+]
+CONFIG_PATH = next(
+    (p for p in (os.path.join(ROOT, "config.yaml"),
+                 os.path.join(REPO, "config.yaml")) if os.path.exists(p)),
+    os.path.join(ROOT, "config.yaml"),
+)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── Load model once at startup ─────────────────────────────────────────────
 def _load_model():
@@ -47,13 +73,10 @@ def _load_model():
         pretrained=False,
     ).to(DEVICE)
 
-    if not os.path.exists(WEIGHTS_PATH):
-        raise FileNotFoundError(
-            f"Model weights not found at {WEIGHTS_PATH}.\n"
-            f"Place best.pth from Kaggle training in: checkpoints/best.pth"
-        )
+    weights_path = _first_existing(WEIGHTS_CANDIDATES, "Model weights")
+    print(f"[demo] Loading weights: {weights_path}")
 
-    ckpt = torch.load(WEIGHTS_PATH, map_location=DEVICE, weights_only=False)
+    ckpt = torch.load(weights_path, map_location=DEVICE, weights_only=False)
     state = ckpt.get("G_ema") or ckpt.get("G") or ckpt
     G.load_state_dict(state)
     G.eval()

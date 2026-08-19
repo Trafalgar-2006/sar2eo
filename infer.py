@@ -264,17 +264,20 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(description="SAR-to-EO Inference")
-    parser.add_argument("--input_dir",    required=True,
+    # Both spellings accepted throughout: hyphens are the argparse convention,
+    # underscores are what this repo shipped with. argparse derives `dest` from
+    # the first option string, so args.input_dir etc. are unchanged.
+    parser.add_argument("--input-dir", "--input_dir", required=True,
                         help="Directory of 256×256 8-bit PNG SAR patches")
-    parser.add_argument("--output_dir",   required=True,
+    parser.add_argument("--output-dir", "--output_dir", required=True,
                         help="Output directory for generated RGB EO PNGs")
     parser.add_argument("--weights",      required=True,
                         help="Path to model checkpoint (.pth)")
-    parser.add_argument("--model_config", default="config.yaml",
+    parser.add_argument("--model-config", "--model_config", default="config.yaml",
                         help="Path to config.yaml")
     parser.add_argument("--device",       default="auto",
                         choices=["auto", "cuda", "cpu"])
-    parser.add_argument("--batch_size",   type=int, default=8)
+    parser.add_argument("--batch-size", "--batch_size", type=int, default=8)
     parser.add_argument("--tta",          action="store_true",
                         help="Enable test-time augmentation (4× rotations, better quality)")
 

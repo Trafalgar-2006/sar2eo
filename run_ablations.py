@@ -329,15 +329,20 @@ def main():
                         "an interrupted study still yields the headline result")
     p.add_argument("--epochs", type=int, default=None,
                    help="override epochs for ALL configs (fairness)")
-    p.add_argument("--batch-size", type=int, default=None,
+    # Underscore spellings accepted too, matching the older scripts in this repo.
+    p.add_argument("--batch-size", "--batch_size", type=int, default=None,
                    help="override batch size; A5000 24GB handles 16")
-    p.add_argument("--subset-size", type=int, default=None,
+    p.add_argument("--subset-size", "--subset_size", type=int, default=None,
                    help="train on N pairs per split — for quick pilot runs")
+    p.add_argument("--num-workers", "--num_workers", type=int, default=None,
+                   help="DataLoader workers. The config default (4) is sized "
+                        "for Kaggle's 2-core boxes; on a workstation use about "
+                        "half your core count or the GPU will wait on PNG decode")
     p.add_argument("--force", action="store_true",
                    help="re-run configs that already have metrics")
-    p.add_argument("--skip-audit", action="store_true",
+    p.add_argument("--skip-audit", "--skip_audit", action="store_true",
                    help="skip the leakage audit (not recommended)")
-    p.add_argument("--allow-cpu", action="store_true",
+    p.add_argument("--allow-cpu", "--allow_cpu", action="store_true",
                    help="permit running without a GPU, for pipeline smoke tests")
     args = p.parse_args()
 
@@ -351,6 +356,8 @@ def main():
         cfg["training"]["batch_size"] = args.batch_size
     if args.subset_size is not None:
         cfg["data"]["subset_size"] = args.subset_size
+    if args.num_workers is not None:
+        cfg["data"]["num_workers"] = args.num_workers
     # A per-session cap makes sense on Kaggle; here it would silently truncate
     # some configs and not others, destroying comparability.
     cfg["training"].pop("session_epoch_limit", None)
@@ -370,6 +377,7 @@ def main():
     print(f"  split_strategy : {cfg['data'].get('split_strategy')}")
     print(f"  dataset_type   : {cfg['data'].get('dataset_type')}")
     print(f"  subset_size    : {cfg['data'].get('subset_size')}")
+    print(f"  num_workers    : {cfg['data'].get('num_workers')}")
     print(f"\nQueue: {' -> '.join(ablations)}")
 
     if not args.skip_audit:

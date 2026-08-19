@@ -47,7 +47,7 @@ from tqdm import tqdm
 
 from data.dataloader import get_dataloaders
 from models.diffusion.unet import ConditionalUNet
-from models.diffusion.ddpm import DDPMScheduler, DDIMSampler
+from models.diffusion.ddpm import DDPM, DDIMSampler
 
 
 def set_seed(seed: int):
@@ -310,11 +310,12 @@ def train_ldm(cfg: dict, resume_path: str = None):
     print(f"  Compute saving: {(256*256*3) / (32*32*lat_ch):.0f}× fewer tokens\n")
 
     # ── Noise scheduler ────────────────────────────────────────────────────
-    scheduler = DDPMScheduler(
-        num_timesteps=cfg.get("diffusion", {}).get("num_timesteps", 1000),
-        beta_schedule="cosine",
-        clip_denoised=True,
-    )
+    # DDPM registers its noise schedule as buffers, so it must be moved to the
+    # device like any other module. It already uses a cosine schedule.
+    scheduler = DDPM(
+        timesteps=cfg.get("diffusion", {}).get("num_timesteps", 1000),
+        pred_mode="eps",
+    ).to(device)
 
     # ── Data ──────────────────────────────────────────────────────────────
     train_loader, val_loader, _ = get_dataloaders(cfg)
@@ -349,9 +350,14 @@ def train_ldm(cfg: dict, resume_path: str = None):
         unet.load_state_dict(ckpt["unet"])
         sar_encoder.load_state_dict(ckpt["sar_enc"])
         optim.load_state_dict(ckpt["optim"])
+        if scaler is not None and ckpt.get("scaler"):
+            scaler.load_state_dict(ckpt["scaler"])
+        # Without this the first validation after resuming always looks like an
+        # improvement and overwrites best.pth with a worse checkpoint.
+        best_loss   = ckpt.get("best_loss", float("inf"))
         history     = ckpt.get("history", history)
         start_epoch = ckpt["epoch"] + 1
-        print(f"[Resume] LDM from epoch {start_epoch}")
+        print(f"[Resume] LDM from epoch {start_epoch} | best_loss={best_loss:.5f}")
     else:
         print(f"[Train] Starting LDM from scratch")
 
@@ -373,10 +379,11 @@ def train_ldm(cfg: dict, resume_path: str = None):
                 # Encode EO to latent space (frozen VAE)
                 latents = vae_enc.encode(eo)   # [B, 4, 32, 32]
 
-                # Sample timestep and add noise
-                t     = torch.randint(0, scheduler.num_timesteps, (B,), device=device)
+                # Sample timestep and add noise. q_sample returns (x_t, noise);
+                # passing our own noise back so the loss target matches exactly.
+                t     = torch.randint(0, scheduler.T, (B,), device=device)
                 noise = torch.randn_like(latents)
-                noisy = scheduler.add_noise(latents, noise, t)
+                noisy, _ = scheduler.q_sample(latents, t, noise)
 
                 # SAR cross-attention context
                 ctx   = sar_encoder(sar)       # [B, 1024, 512]
@@ -384,10 +391,9 @@ def train_ldm(cfg: dict, resume_path: str = None):
                 # Predict noise
                 pred  = unet(noisy, t, ctx)
 
-                # SNR-weighted loss (upweights hard timesteps)
-                snr   = scheduler.snr(t)
-                gamma = snr / (snr + 1)        # min-SNR weighting
-                loss  = (gamma * (pred - noise) ** 2).mean()
+                # DDPM.loss already applies Min-SNR weighting (Hang et al. 2023),
+                # so use it rather than re-deriving the weights here.
+                loss  = scheduler.loss(pred, noise, t)
 
             optim.zero_grad()
             if scaler:
@@ -433,9 +439,9 @@ def train_ldm(cfg: dict, resume_path: str = None):
                     B_v    = v_sar.shape[0]
 
                     v_lat  = vae_enc.encode(v_eo)
-                    v_t    = torch.randint(0, scheduler.num_timesteps, (B_v,), device=device)
+                    v_t    = torch.randint(0, scheduler.T, (B_v,), device=device)
                     v_noise = torch.randn_like(v_lat)
-                    v_noisy = scheduler.add_noise(v_lat, v_noise, v_t)
+                    v_noisy, _ = scheduler.q_sample(v_lat, v_t, v_noise)
                     v_ctx   = sar_encoder(v_sar)
 
                     with torch.amp.autocast(device_type="cuda", enabled=use_amp):
@@ -487,6 +493,9 @@ def train_ldm(cfg: dict, resume_path: str = None):
                 "epoch": epoch, "unet": unet.state_dict(),
                 "sar_enc": sar_encoder.state_dict(),
                 "optim": optim.state_dict(), "history": history,
+                # Required for a clean resume — see the [Resume] block above.
+                "scaler": scaler.state_dict() if scaler is not None else None,
+                "best_loss": best_loss,
             }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
 
     print(f"\n✓ LDM training done — {(time.time()-t_start)/60:.1f} min")

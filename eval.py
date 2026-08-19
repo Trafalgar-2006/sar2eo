@@ -191,8 +191,11 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(description="SAR-to-EO Evaluation")
-    parser.add_argument("--pred_dir",  type=str, default=None)
-    parser.add_argument("--gt_dir",    type=str, default=None)
+    # Both spellings accepted throughout: hyphens are the argparse convention,
+    # underscores are what this repo shipped with. argparse derives `dest` from
+    # the first option string, so args.pred_dir etc. are unchanged.
+    parser.add_argument("--pred-dir", "--pred_dir", type=str, default=None)
+    parser.add_argument("--gt-dir",   "--gt_dir",   type=str, default=None)
     parser.add_argument("--config",    type=str, default="config.yaml")
     parser.add_argument("--weights",   type=str, default=None)
     parser.add_argument("--split",     type=str, default="test",

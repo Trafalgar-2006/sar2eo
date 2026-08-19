@@ -169,10 +169,26 @@ def train(cfg: dict, resume_path: str = None):
         if ckpt.get("ema"):
             ema.load_state_dict(ckpt["ema"])
         optim.load_state_dict(ckpt["optim"])
+
+        # Restore the LR schedule position, then push the restored LR into the
+        # optimiser — load_state_dict does not do the second part, so without it
+        # the first resumed epoch trains at the scheduler's construction-time LR.
+        if ckpt.get("sched"):
+            sched.load_state_dict(ckpt["sched"])
+            for grp, lr in zip(optim.param_groups, sched.get_last_lr()):
+                grp["lr"] = lr
+        if scaler is not None and ckpt.get("scaler"):
+            scaler.load_state_dict(ckpt["scaler"])
+
+        # Without this the first validation after resuming always looks like an
+        # improvement and overwrites best.pth with a worse checkpoint.
+        best_val    = ckpt.get("best_val", float("inf"))
+
         start_epoch = ckpt["epoch"] + 1
         global_step = ckpt.get("global_step", 0)
         history     = ckpt.get("history", history)
-        print(f"[Resume] from epoch {start_epoch}")
+        print(f"[Resume] from epoch {start_epoch} "
+              f"| lr={optim.param_groups[0]['lr']:.2e} | best_val={best_val:.4f}")
     else:
         # Xavier init
         def init_w(m):
@@ -293,6 +309,10 @@ def train(cfg: dict, resume_path: str = None):
                 "model":       model.state_dict(),
                 "ema":         ema.state_dict(),
                 "optim":       optim.state_dict(),
+                # Required for a clean resume — see the [Resume] block above.
+                "sched":       sched.state_dict(),
+                "scaler":      scaler.state_dict() if scaler is not None else None,
+                "best_val":    best_val,
                 "history":     history,
             }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
 

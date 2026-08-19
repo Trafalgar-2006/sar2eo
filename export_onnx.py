@@ -140,7 +140,7 @@ if __name__ == "__main__":
     parser.add_argument("--config",  default="config.yaml")
     parser.add_argument("--output",  default="sar2eo_generator.onnx")
     parser.add_argument("--opset",   type=int, default=17)
-    parser.add_argument("--no-quantize", action="store_true")
+    parser.add_argument("--no-quantize", "--no_quantize", action="store_true")
     args = parser.parse_args()
 
     export_onnx(
