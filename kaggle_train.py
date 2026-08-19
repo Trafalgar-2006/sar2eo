@@ -96,8 +96,12 @@ config = {
         "n_layers_D": 3,
     },
     "training": {
-        "epochs": 75,           # Session 1: epochs 1-75 (~12hrs on T4)
-                                # Session 2: resume for epochs 76-150
+        # `epochs` is the TRUE total and must not change between sessions — the
+        # cosine LR schedule spans it, so switching 75 -> 150 mid-run rescales
+        # the schedule and makes the LR jump back up on resume.
+        # session_epoch_limit caps what a single 12-hour session executes.
+        "epochs": 150,
+        "session_epoch_limit": 75,
         "batch_size": 8,
         "lr_encoder": 2e-5,
         "lr_decoder": 2e-4,
@@ -220,34 +224,33 @@ import glob
 cfg = load_config(CFG_PATH)
 make_dirs(cfg)
 
-# ── Auto-detect session number from existing checkpoints ─────────────────
-# Session 1: no checkpoints → train epochs 1-75
-# Session 2: epoch_075.pth found → set epochs=150, resume from 75
+# ── Report how far along we are ───────────────────────────────────────────
+# train() resumes from the latest checkpoint on its own and stops after
+# session_epoch_limit epochs, so nothing needs rewriting here.
 CKPT_DIR = "/kaggle/working/checkpoints/full"
 existing = sorted(glob.glob(f"{CKPT_DIR}/epoch_*.pth"))
 
-if existing:
-    # Parse the latest saved epoch number
-    import re
-    latest_epoch = max(
-        int(re.search(r'epoch_(\d+)', f).group(1))
-        for f in existing
-        if re.search(r'epoch_(\d+)', f)
-    )
-    if latest_epoch >= 70:   # ≥70 means Session 1 is basically done
-        cfg["training"]["epochs"] = 150
-        print(f"🔄 SESSION 2 DETECTED — resuming from epoch {latest_epoch}, training to 150")
-    else:
-        print(f"🔄 Partial checkpoint found at epoch {latest_epoch} — resuming within Session 1")
-else:
-    print("🚀 SESSION 1 — training epochs 1–75")
+done = []
+for f in existing:
+    stem = os.path.basename(f).replace("epoch_", "").replace(".pth", "")
+    if stem.isdigit():
+        done.append(int(stem))
+last_epoch = max(done) if done else 0
 
-n_epochs_to_run = cfg["training"]["epochs"]
-print(f"   Config → epochs={n_epochs_to_run} | save_freq=5 | val_freq=10")
-print(f"   Estimated time: {n_epochs_to_run * 9.5 / 60:.1f} hrs on T4")
-if n_epochs_to_run == 75:
-    print(f"   ⚠️  IMPORTANT: Before the 12-hr mark, click 'Save Version' in Kaggle")
-    print(f"      This saves checkpoints/full/*.pth so Session 2 can resume from epoch 75")
+TOTAL   = cfg["training"]["epochs"]
+PER_RUN = cfg["training"]["session_epoch_limit"]
+this_session = min(PER_RUN, TOTAL - last_epoch)
+
+if last_epoch:
+    print(f"🔄 RESUMING — {last_epoch}/{TOTAL} epochs done")
+else:
+    print(f"🚀 FRESH START — target {TOTAL} epochs")
+print(f"   This session: {this_session} epoch(s) "
+      f"({last_epoch + 1} → {last_epoch + this_session})")
+print(f"   save_freq=5 | val_freq=10")
+if last_epoch + this_session < TOTAL:
+    print(f"   ⚠️  Before the 12-hr mark, click 'Save Version' in Kaggle,")
+    print(f"      then add this notebook's output as an Input next session.")
 
 print("\n" + "="*60)
 print(" TRAINING — ResNet50-UNet + CBAM + Multi-Scale PatchGAN")
@@ -257,14 +260,14 @@ G = train(cfg)
 print("\n✓ Training complete!")
 
 # ── Post-training: remind user to Save Version ────────────────────────────
-if n_epochs_to_run == 75:
+if last_epoch + this_session < TOTAL:
     print("\n" + "="*60)
-    print(" ✅  SESSION 1 COMPLETE — SAVE VERSION NOW")
+    print(" ✅  SESSION COMPLETE — SAVE VERSION NOW")
     print("="*60)
     print("  1. Click 'Save Version' (top-right) to preserve outputs")
-    print("  2. This saves checkpoints/full/epoch_075.pth and all outputs")
-    print("  3. In Session 2: add this notebook's output as Input Dataset")
-    print("     The script will auto-detect it and train epochs 76–150")
+    print("  2. This saves checkpoints/full/*.pth and all outputs")
+    print("  3. Next session: add this notebook's output as an Input Dataset")
+    print(f"     Training resumes at epoch {last_epoch + this_session + 1}")
     print("="*60 + "\n")
 
 # ── 8. EVALUATE ──────────────────────────────────────────────────────────
