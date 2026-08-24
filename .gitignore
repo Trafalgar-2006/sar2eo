@@ -22,8 +22,12 @@ logs/
 runs/
 wandb/
 
-# Data (too large for git — download separately)
-data/
+# Data (too large for git — download separately).
+# Ignore the contents, not the package itself: data/dataloader.py is source
+# and must stay tracked. A bare `data/` rule also matched it, so every commit
+# touching the loader needed `git add -f`.
+data/*
+!data/*.py
 *.h5
 *.hdf5
 *.tif
