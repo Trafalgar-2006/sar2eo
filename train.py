@@ -224,7 +224,10 @@ def train(cfg: dict):
     set_seed(cfg["training"]["seed"])
 
     # ---- Data --------------------------------------------------------------
-    train_loader, val_loader, _ = get_dataloaders(cfg)
+    # D7/F8: train() never uses the test split, so don't discover/split/build
+    # it at all — was a third of every startup's dataset construction thrown
+    # away (train.py used to unpack and discard it).
+    train_loader, val_loader, _ = get_dataloaders(cfg, splits=("train", "val"))
 
     # ---- Models ------------------------------------------------------------
     model_cfg = cfg["model"]
@@ -313,6 +316,9 @@ def train(cfg: dict):
     }
 
     best_val_loss = float("inf")
+    # OQ-5: perceptual model-selection, tracked alongside (never instead
+    # of) the L1 criterion that picks best.pth.
+    best_val_lpips = float("inf")
     start_epoch   = 1
     global_step   = 0
 
@@ -362,6 +368,7 @@ def train(cfg: dict):
         # Restore the best-so-far val loss, otherwise the first validation of a
         # resumed session overwrites best.pth with a worse checkpoint.
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        best_val_lpips = ckpt.get("best_val_lpips", float("inf"))
 
         global_step = ckpt.get("global_step", 0)
         start_epoch = ckpt["epoch"] + 1
@@ -488,6 +495,15 @@ def train(cfg: dict):
         if epoch % val_freq == 0:
             G.eval()
             val_losses = []
+            val_lpips_vals: List[float] = []
+            # Lazily imported: a missing `lpips` package degrades to
+            # L1-only model-selection instead of killing a live run.
+            try:
+                from utils.metrics import compute_lpips
+                _lpips_ok = True
+            except Exception as _e:      # pragma: no cover - env dependent
+                print(f"  [Val] lpips unavailable ({_e}) - best_lpips.pth disabled")
+                _lpips_ok = False
             sar_samples, pred_samples, gt_samples = [], [], []
 
             with ema.apply(G):     # temporarily load EMA weights
@@ -499,6 +515,16 @@ def train(cfg: dict):
                             v_fake = G(v_sar)
                         val_l1 = loss_fns["l1"](v_fake, v_real).item()
                         val_losses.append(val_l1)
+
+                        if _lpips_ok:
+                            try:
+                                val_lpips_vals.append(compute_lpips(
+                                    v_fake.float(), v_real.float(), device=device))
+                            except Exception as _e:
+                                print(f"  [Val] LPIPS failed ({_e}) - "
+                                      f"perceptual selection disabled")
+                                _lpips_ok = False
+                                val_lpips_vals.clear()
 
                         if len(sar_samples) < 10:
                             sar_samples.append(v_sar[0].cpu())
@@ -524,6 +550,26 @@ def train(cfg: dict):
                 }, best_path)
                 print(f"  [Val] ✓ Best checkpoint saved → {best_path}")
 
+            # OQ-5 (additive): a second checkpoint selected on perception,
+            # not pixels. best.pth above is untouched - anything already
+            # pointing at it keeps the exact same behaviour.
+            if val_lpips_vals:
+                val_lpips = float(np.mean(val_lpips_vals))
+                print(f"  [Val/EMA] LPIPS={val_lpips:.4f}")
+                if val_lpips < best_val_lpips:
+                    best_val_lpips = val_lpips
+                    lpips_path = os.path.join(ckpt_dir, "best_lpips.pth")
+                    torch.save({
+                        "epoch":      epoch,
+                        "G":          G.state_dict(),
+                        "G_ema":      ema.state_dict(),
+                        "D":          D.state_dict() if D else None,
+                        "val_loss":   val_loss,
+                        "val_lpips":  val_lpips,
+                        "meta":       _repr_meta,
+                    }, lpips_path)
+                    print(f"  [Val] ✓ Best LPIPS checkpoint saved → {lpips_path}")
+
         # ---- Periodic checkpoint -------------------------------------------
         if epoch % save_freq == 0:
             ckpt_path = os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth")
@@ -542,6 +588,7 @@ def train(cfg: dict):
                 "scaler_G":    scaler_G.state_dict() if scaler_G else None,
                 "scaler_D":    scaler_D.state_dict() if scaler_D else None,
                 "best_val_loss": best_val_loss,
+                "best_val_lpips": best_val_lpips,
                 "history":     history,
                 "meta":        _repr_meta,   # reproducibility
             }, ckpt_path)
@@ -566,6 +613,7 @@ def train(cfg: dict):
                     "scaler_G": scaler_G.state_dict() if scaler_G else None,
                     "scaler_D": scaler_D.state_dict() if scaler_D else None,
                     "best_val_loss": best_val_loss,
+                    "best_val_lpips": best_val_lpips,
                     "history": history, "meta": _repr_meta,
                 }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
             print(f"\n[Session] Ran {session_limit} epoch(s) this session, "

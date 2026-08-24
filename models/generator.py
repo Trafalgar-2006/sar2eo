@@ -332,9 +332,13 @@ class UNetGenerator(nn.Module):
         Initialise decoder and projection weights with N(0, 0.02).
         Encoder weights are left as-is (pretrained ImageNet).
         """
-        encoder_id = id(self.encoder)
+        # named_modules() yields the encoder's children too, so matching on the
+        # encoder module alone left every ResNet50 conv/BN inside it to be
+        # re-randomised below — silently discarding the ImageNet weights and
+        # making `pretrained_encoder` and the 10x-lower encoder LR meaningless.
+        # Match on the name prefix so the whole encoder subtree is skipped.
         for name, m in self.named_modules():
-            if id(m) == encoder_id:
+            if name == "encoder" or name.startswith("encoder."):
                 continue   # skip encoder — already pretrained
             # Only initialise non-encoder layers
             if isinstance(m, nn.Conv2d):

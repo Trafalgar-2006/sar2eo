@@ -84,6 +84,16 @@ if torch.cuda.is_available():
     print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
 
 # ── 5. Write Kaggle-specific config ──────────────────────────────────────
+# ── dataset_type: read from the repo config, never hard-coded here ──────────
+# config.yaml in the repo is the single source of truth for which dataset this
+# run trains on (human-ratified: "combined"). The launcher used to hard-code
+# "kaggle", so the repo config was silently dead. Read it instead, and both
+# launchers stay in lockstep with it for free.
+with open(f"{REPO}/config.yaml", encoding="utf-8") as _f:
+    _repo_cfg = yaml.safe_load(_f)
+DATASET_TYPE = _repo_cfg["data"]["dataset_type"]
+print(f"dataset_type (from config.yaml) -> {DATASET_TYPE}")
+
 config = {
     "model": {
         "input_channels": 1,
@@ -126,7 +136,7 @@ config = {
     },
     "active_ablation": "full",
     "data": {
-        "dataset_type":   "kaggle",
+        "dataset_type":   DATASET_TYPE,
         # "scene" groups patches by the scene they were tiled from. SEN1-2 cuts
         # each scene on a stride grid, so neighbouring patches overlap on the
         # ground — a per-patch split puts near-duplicates in train AND test and
@@ -273,27 +283,38 @@ if last_epoch + this_session < TOTAL:
 # ── 8. EVALUATE ──────────────────────────────────────────────────────────
 from eval import run_inference_to_dir, evaluate_dirs
 
-WEIGHTS   = "/kaggle/working/checkpoints/full/best.pth"
-PRED_DIR  = "/kaggle/working/outputs/eval_preds_test"
-GT_DIR    = "/kaggle/working/outputs/eval_gt_test"
-OUT_CSV   = "/kaggle/working/outputs/metrics_test.csv"
+CKPT_DIR = "/kaggle/working/checkpoints/full"
+WEIGHTS  = f"{CKPT_DIR}/best.pth"
+if not os.path.exists(WEIGHTS):
+    WEIGHTS = f"{CKPT_DIR}/final.pth"
+print(f"Evaluating: {WEIGHTS}")
 
-run_inference_to_dir(CFG_PATH, WEIGHTS, "test", PRED_DIR, GT_DIR, use_tta=False)
-metrics = evaluate_dirs(PRED_DIR, GT_DIR, OUT_CSV, split="test")
+# Assignment §4 wants all four metrics on BOTH splits, not just test.
+all_metrics = {}
+for _split in ("val", "test"):
+    _pred = f"/kaggle/working/outputs/eval_preds_{_split}"
+    _gt   = f"/kaggle/working/outputs/eval_gt_{_split}"
+    _csv  = f"/kaggle/working/outputs/metrics_{_split}.csv"
+    run_inference_to_dir(CFG_PATH, WEIGHTS, _split, _pred, _gt, use_tta=False)
+    all_metrics[_split] = evaluate_dirs(_pred, _gt, _csv, split=_split)
 
 print("\n" + "="*50)
 print("  FINAL METRICS")
 print("="*50)
-print(f"  SSIM  ↑ : {metrics['ssim']:.4f}")
-print(f"  PSNR  ↑ : {metrics['psnr']:.2f} dB")
-print(f"  LPIPS ↓ : {metrics['lpips']:.4f}")
-print(f"  FID   ↓ : {metrics['fid']:.2f}")
+print(f"  {'metric':<8}{'val':>12}{'test':>12}")
+for _k, _lbl in (("ssim","SSIM ↑"), ("psnr","PSNR ↑"),
+                 ("lpips","LPIPS ↓"), ("fid","FID ↓")):
+    print(f"  {_lbl:<8}{all_metrics['val'][_k]:>12.4f}{all_metrics['test'][_k]:>12.4f}")
 print("="*50)
+
+# best_lpips.pth is the perceptually-selected checkpoint (best.pth is val-L1).
+# Score it too when it exists, and sweep final/epoch checkpoints if you want:
+#   python eval.py --config config_kaggle.yaml --weights checkpoints/full/best_lpips.pth --split test
 print("\n✓ Done! Download outputs from /kaggle/working/")
 
 # Files to download:
 print("\n📁 Key files to download:")
-print("  checkpoints/full/best.pth")
+print("  checkpoints/full/best.pth  (+ best_lpips.pth if validation ran)")
 print("  outputs/losses_full.csv")
-print("  outputs/metrics_test.csv")
+print("  outputs/metrics_val.csv + outputs/metrics_test.csv")
 print("  logs/full_steps.jsonl")

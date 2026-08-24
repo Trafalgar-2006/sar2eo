@@ -78,6 +78,15 @@ class EMA:
         """
         self._step += 1
 
+        # Buffers (BatchNorm running_mean/running_var/num_batches_tracked) are
+        # state, not learnable parameters — they are never touched by the
+        # optimiser, so there is nothing to average. Copy them across verbatim.
+        # Without this the shadow keeps its construction-time BN statistics for
+        # the whole run, and every `apply()` (validation, best.pth, inference)
+        # runs the network on stale stats.
+        for shadow_b, live_b in zip(self.shadow.buffers(), model.buffers()):
+            shadow_b.data.copy_(live_b.data)
+
         if self._step < self.start_step:
             # Before start_step: just copy live weights (no averaging)
             for shadow_p, live_p in zip(self.shadow.parameters(),
