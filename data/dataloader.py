@@ -131,6 +131,18 @@ def _scene_key(sar_path: str) -> str:
     return str(Path(sar_path).parent)
 
 
+def _terrain_key(sar_path: str) -> str:
+    """
+    Return the stratum a patch belongs to — the directory holding s1/ and s2/.
+
+    Layout is <root>/<terrain>/s1/<file>.png, so this is the terrain class for
+    the Kaggle set and the ROI folder for SEN1-2. Used only to balance the
+    splits; it has no bearing on disjointness, which _scene_key alone decides.
+    """
+    parts = Path(sar_path).parts
+    return parts[-3] if len(parts) >= 3 else "unknown"
+
+
 # ---------------------------------------------------------------------------
 # SEN1-2 pair discovery
 # ---------------------------------------------------------------------------
@@ -247,22 +259,30 @@ def _discover_kaggle_pairs_cached(root: str,
     else:
         terrain_dirs = all_subdirs
 
-    pairs: List[Tuple[str, str]] = []
+    # Resolve every directory that actually holds an s1/s2 pair. Archives often
+    # unzip with an extra level (data/sentinel12/v_2/agri/s1), so when a
+    # candidate has no s1/s2 of its own we descend — and take ALL its children,
+    # not the first. Stopping at the first match silently dropped every terrain
+    # but one: on the standard Kaggle archive that is 4,000 of 16,000 pairs, all
+    # from a single terrain, with nothing in the output to say so.
+    resolved: List[Tuple[str, Path, Path]] = []
     for tdir in terrain_dirs:
         s1_dir, s2_dir = find_s1_s2(tdir)
-        if s1_dir is None:
-            for sub in sorted(tdir.iterdir()):
-                if sub.is_dir():
-                    s1_dir, s2_dir = find_s1_s2(sub)
-                    if s1_dir is not None:
-                        break
-        if s1_dir is None:
-            print(f"[WARNING] No s1/s2 dirs in '{tdir.name}' — skipping")
+        if s1_dir is not None:
+            resolved.append((tdir.name, s1_dir, s2_dir))
             continue
+        for sub in sorted(p for p in tdir.iterdir() if p.is_dir()):
+            sub_s1, sub_s2 = find_s1_s2(sub)
+            if sub_s1 is not None:
+                resolved.append((f"{tdir.name}/{sub.name}", sub_s1, sub_s2))
+        if not any(name.startswith(f"{tdir.name}/") for name, _, _ in resolved):
+            print(f"[WARNING] No s1/s2 dirs in '{tdir.name}' — skipping")
 
+    pairs: List[Tuple[str, str]] = []
+    for tdir_name, s1_dir, s2_dir in resolved:
         s1_files = glob_images(s1_dir)
         s2_files = glob_images(s2_dir)
-        print(f"[INFO]   {tdir.name}: s1={len(s1_files)}, s2={len(s2_files)}")
+        print(f"[INFO]   {tdir_name}: s1={len(s1_files)}, s2={len(s2_files)}")
 
         if not s1_files or not s2_files:
             continue
@@ -280,11 +300,11 @@ def _discover_kaggle_pairs_cached(root: str,
             # mispair is at least visible, not purely silent.
             sample = ", ".join(f"{a.name}<->{b.name}"
                                 for a, b in zip(s1_files[:3], s2_files[:3]))
-            print(f"[WARNING] Pairing '{tdir.name}' by SORTED INDEX (no "
+            print(f"[WARNING] Pairing '{tdir_name}' by SORTED INDEX (no "
                   f"filename match) — verify these look right: {sample}")
             pairs.extend([(str(a), str(b)) for a, b in zip(s1_files, s2_files)])
         else:
-            print(f"[WARNING] '{tdir.name}': count mismatch s1={len(s1_files)} "
+            print(f"[WARNING] '{tdir_name}': count mismatch s1={len(s1_files)} "
                   f"vs s2={len(s2_files)} — skipping")
 
     print(f"[INFO] Kaggle total: {len(pairs)} pairs")
@@ -514,25 +534,59 @@ class SARtoEODataset(Dataset):
                 f"source dataset — see DATA_AUDIT.md §5)."
             )
 
-        n_total  = len(pairs)
-        targets  = {"train": 0.80 * n_total, "val": 0.10 * n_total, "test": 0.10 * n_total}
-        buckets: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
+        def _allocate(scene_keys: List[str]) -> Dict[str, List[Tuple[str, str]]]:
+            """
+            Deficit-fill one pool of scenes into train/val/test.
 
-        # Seed val and test with the two smallest scenes so neither starves and
-        # the distortion of holding them back stays minimal.
-        by_size = sorted(keys, key=lambda k: len(groups[k]))
-        for name, key in (("val", by_size[0]), ("test", by_size[1])):
-            buckets[name].extend(groups[key])
+            Each scene goes to whichever split is furthest below its share of
+            THIS pool. A plain "fill train to 80% then move on" pass overshoots
+            on the scene that crosses the boundary and can leave val or test
+            empty, so both are seeded with the two smallest scenes first — the
+            two whose removal distorts the ratio least.
+            """
+            local: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
+            n_pool  = sum(len(groups[k]) for k in scene_keys)
+            targets = {"train": 0.80 * n_pool, "val": 0.10 * n_pool, "test": 0.10 * n_pool}
 
-        seeded = {by_size[0], by_size[1]}
+            by_size = sorted(scene_keys, key=lambda k: len(groups[k]))
+            local["val"].extend(groups[by_size[0]])
+            local["test"].extend(groups[by_size[1]])
+            seeded = {by_size[0], by_size[1]}
+
+            for key in scene_keys:
+                if key in seeded:
+                    continue
+                target = max(targets, key=lambda s: targets[s] - len(local[s]))
+                local[target].extend(groups[key])
+            return local
+
+        # Balance the splits across terrain classes where possible. Allocating
+        # all scenes from one pool lets whichever terrains happen to land in
+        # test dominate it — on the Kaggle set that produced a test split 62%
+        # barrenland with only 32 grassland patches, which makes the headline
+        # metric a barrenland metric and per-terrain analysis meaningless for
+        # the rest. Allocating each terrain separately fixes the composition.
+        #
+        # Disjointness is unaffected either way: whole scenes still move as a
+        # unit, and a scene belongs to exactly one terrain.
+        strata: Dict[str, List[str]] = {}
         for key in keys:
-            if key in seeded:
-                continue
-            # Whichever split is furthest below its target share takes it.
-            target = max(targets, key=lambda s: targets[s] - len(buckets[s]))
-            buckets[target].extend(groups[key])
+            strata.setdefault(_terrain_key(groups[key][0][0]), []).append(key)
 
-        print(f"[Split] scene-disjoint | {len(groups):,} scenes -> "
+        # Needs >=3 scenes per stratum, since each is split three ways.
+        stratified = len(strata) > 1 and all(len(v) >= 3 for v in strata.values())
+
+        buckets: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
+        if stratified:
+            for terrain in sorted(strata):
+                for name, items in _allocate(strata[terrain]).items():
+                    buckets[name].extend(items)
+        else:
+            buckets = _allocate(keys)
+
+        how = (f"stratified over {len(strata)} terrain(s)" if stratified
+               else "single pool")
+        print(f"[Split] scene-disjoint, {how} | {len(groups):,} scenes -> "
               f"train={len(buckets['train']):,} "
               f"val={len(buckets['val']):,} "
               f"test={len(buckets['test']):,}")
