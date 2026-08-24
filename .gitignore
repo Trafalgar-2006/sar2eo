@@ -42,6 +42,7 @@ data/
 *.ipynb
 # ...except the Kaggle training notebooks, which are deliverables
 !kaggle_phase1_train.ipynb
+!local_train.ipynb
 
 # Reports / documents (kept out of the repo, as in 5160c67)
 *.docx
