@@ -68,3 +68,10 @@ flagged/
 
 # Scratch artifacts
 _*.html
+
+# Agent process notes (kept locally, not project deliverables)
+HANDOFF.md
+RUN_SPEC.md
+READINESS.md
+TEST_REPORT.md
+DATA_AUDIT.md
