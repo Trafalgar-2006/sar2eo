@@ -304,6 +304,10 @@ def train(cfg: dict):
     # Optional cap on epochs per invocation, for 12h-limited Kaggle sessions.
     # None = run straight through to n_epochs.
     session_limit = train_cfg.get("session_epoch_limit") or None
+    # Wall-clock cap, for a fixed lab slot ("the GPU is mine 4 hours a day").
+    # Checked after each epoch, so a run always stops on an epoch boundary with
+    # a complete checkpoint — never part-way through one.
+    session_minutes = train_cfg.get("session_time_limit_minutes") or None
     ckpt_dir  = os.path.join(cfg["paths"]["checkpoint_dir"], ablation)
     out_dir   = cfg["paths"]["output_dir"]
     log_dir   = cfg["paths"]["log_dir"]
@@ -599,8 +603,16 @@ def train(cfg: dict):
         # `epochs` stays at the true total (so the cosine schedule spans the
         # whole run and does not jump when a later session resumes); this only
         # caps how many epochs any single session executes.
-        if (session_limit and epoch < n_epochs
-                and (epoch - start_epoch + 1) >= session_limit):
+        epochs_this_session = epoch - start_epoch + 1
+        mins_elapsed        = (time.time() - t_start) / 60
+        mean_epoch          = mins_elapsed / max(1, epochs_this_session)
+        hit_epoch_cap = bool(session_limit) and epochs_this_session >= session_limit
+        # Stop when the NEXT epoch would overrun the slot, judged by this
+        # session's own mean epoch time. Stopping only once already over would
+        # overshoot the slot by a full epoch every single time.
+        hit_time_cap = (session_minutes is not None
+                        and mins_elapsed + mean_epoch > session_minutes)
+        if (hit_epoch_cap or hit_time_cap) and epoch < n_epochs:
             if epoch % save_freq != 0:   # make sure this session's work survives
                 torch.save({
                     "epoch": epoch, "global_step": global_step,
@@ -616,10 +628,14 @@ def train(cfg: dict):
                     "best_val_lpips": best_val_lpips,
                     "history": history, "meta": _repr_meta,
                 }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
-            print(f"\n[Session] Ran {session_limit} epoch(s) this session, "
-                  f"stopping at epoch {epoch}/{n_epochs}.")
-            print(f"[Session] Save this notebook's output, add it as an input "
-                  f"next session, and rerun to continue from epoch {epoch + 1}.")
+            why       = "time budget" if hit_time_cap else "epoch budget"
+            remaining = n_epochs - epoch
+            print(f"\n[Session] Stopping on {why}: {epochs_this_session} epoch(s) "
+                  f"in {mins_elapsed:.1f} min, at epoch {epoch}/{n_epochs}.")
+            print(f"[Session] {remaining} epoch(s) left, "
+                  f"~{remaining * mean_epoch / 60:.1f} h at {mean_epoch:.1f} min/epoch.")
+            print(f"[Session] Rerun the same command to resume at epoch {epoch + 1} — "
+                  f"optimiser, LR schedule and best-so-far are all restored.")
             return G
 
     # ---- Final checkpoint ---------------------------------------------------

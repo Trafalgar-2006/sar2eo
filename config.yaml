@@ -38,6 +38,14 @@ training:
   mixed_precision: true       # fp16 via torch.amp
   save_freq: 10               # Save periodic checkpoint every N epochs
   val_freq: 5                 # Run validation every N epochs
+  # Session caps. `epochs` above stays the TRUE total either way — the cosine
+  # LR schedule spans it, so changing it between sessions would rescale the
+  # schedule and make the LR jump on resume. These only cap one invocation.
+  # Both stop on an epoch boundary with a full checkpoint; rerun to continue.
+  session_epoch_limit: null           # stop after N epochs this run
+  session_time_limit_minutes: null    # stop after N minutes this run
+                                      # e.g. 225 for a 4-hour lab slot with
+                                      # 15 min of setup/teardown headroom
   seed: 42
 
 loss:
