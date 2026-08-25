@@ -65,7 +65,16 @@ def plot_loss_curves(
     epochs = list(range(1, len(next(iter(loss_history.values()))) + 1))
 
     # ---- PNG plot --------------------------------------------------------
-    n_plots = len(loss_history)
+    # Validation series are drawn against training L1 in a single dedicated
+    # panel rather than as separate charts. The thing worth seeing is the *gap*
+    # between the two curves — train falling while val flattens or rises is
+    # what overfitting looks like, and it is invisible on separate axes.
+    VAL_KEYS = ("val_l1", "val_lpips")
+    has_val = any(k in loss_history for k in VAL_KEYS)
+    panel_keys = [k for k in loss_history
+                  if k not in VAL_KEYS and k != "train_l1"]
+
+    n_plots = len(panel_keys) + (1 if has_val else 0)
     fig, axes = plt.subplots(1, n_plots, figsize=(5 * n_plots, 4))
     if n_plots == 1:
         axes = [axes]
@@ -81,12 +90,28 @@ def plot_loss_curves(
         "val_D_total": "#B71C1C",
     }
 
-    for ax, (name, values) in zip(axes, loss_history.items()):
+    for ax, name in zip(axes, panel_keys):
         color = colors.get(name, "#607D8B")
-        ax.plot(epochs, values, color=color, linewidth=1.5, label=name)
+        ax.plot(epochs, loss_history[name], color=color, linewidth=1.5, label=name)
         ax.set_xlabel("Epoch", fontsize=10)
         ax.set_ylabel("Loss", fontsize=10)
         ax.set_title(name, fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9)
+
+    if has_val:
+        ax = axes[len(panel_keys)]
+        if "train_l1" in loss_history:
+            ax.plot(epochs, loss_history["train_l1"], color="#4CAF50",
+                    linewidth=1.5, label="train L1")
+        if "val_l1" in loss_history:
+            # Validation runs every val_freq epochs; the rest are NaN, which
+            # matplotlib skips. Markers make the sampled points legible.
+            ax.plot(epochs, loss_history["val_l1"], color="#E53935",
+                    linewidth=1.5, marker="o", markersize=3.5, label="val L1")
+        ax.set_xlabel("Epoch", fontsize=10)
+        ax.set_ylabel("L1 (unweighted)", fontsize=10)
+        ax.set_title("Overfitting check — train vs val", fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
 

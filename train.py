@@ -314,9 +314,18 @@ def train(cfg: dict):
     sample_dir= os.path.join(out_dir, "samples", ablation)
     step_log  = os.path.join(log_dir, f"{ablation}_steps.jsonl")
 
+    # Validation figures are recorded per-epoch alongside the training losses so
+    # the train/val gap is visible in the CSV and the plot. Without them the only
+    # record of validation is a printed line that scrolls past, and overfitting —
+    # train loss falling while val loss rises — cannot be seen at all.
+    #
+    # `train_l1` is the UNWEIGHTED L1, which `val_l1` can be compared against
+    # directly; `G_l1` is multiplied by lambda_l1 (100) and is not comparable.
+    VAL_KEYS = ("val_l1", "val_lpips")
     history: Dict[str, List[float]] = {
         "G_total": [], "G_l1": [], "G_adv": [],
         "G_fft": [],  "G_vgg": [], "G_ssim": [], "D_total": [],
+        "train_l1": [], "val_l1": [], "val_lpips": [],
     }
 
     best_val_loss = float("inf")
@@ -346,6 +355,13 @@ def train(cfg: dict):
             # Ensure G_ssim key exists (backward compat)
             if "G_ssim" not in history:
                 history["G_ssim"] = [0.0] * len(history["G_total"])
+            # Checkpoints written before validation tracking existed have no
+            # val columns; backfill so the CSV and plot stay rectangular.
+            n_done = len(history["G_total"])
+            for _k, _fill in (("train_l1", 0.0), ("val_l1", float("nan")),
+                              ("val_lpips", float("nan"))):
+                if _k not in history:
+                    history[_k] = [_fill] * n_done
 
         # Restore LR schedule position. Without this the scheduler restarts at
         # step 0, so a resumed session re-runs warmup and cosine from the top —
@@ -394,7 +410,11 @@ def train(cfg: dict):
         if D is not None:
             D.train()
 
-        epoch_losses: Dict[str, List[float]] = {k: [] for k in history}
+        # Validation keys are filled by the validation block, not by per-batch
+        # accumulation, so they are excluded here.
+        epoch_losses: Dict[str, List[float]] = {
+            k: [] for k in history if k not in VAL_KEYS
+        }
 
         for batch_idx, batch in enumerate(train_loader):
             sar     = batch["sar"].to(device)       # [B, 1, 256, 256]
@@ -444,6 +464,9 @@ def train(cfg: dict):
 
             for k in ["G_total", "G_l1", "G_adv", "G_fft", "G_vgg", "G_ssim"]:
                 epoch_losses[k].append(g_losses[k].item())
+            # Unweighted, so it can be compared directly against val_l1.
+            epoch_losses["train_l1"].append(
+                g_losses["G_l1"].item() / max(loss_weights["lambda_l1"], 1e-8))
 
             # Per-step logging (every 50 steps)
             if global_step % 50 == 0:
@@ -458,6 +481,12 @@ def train(cfg: dict):
 
         # ---- Log epoch means -----------------------------------------------
         for k in history:
+            if k in VAL_KEYS:
+                # Placeholder for every epoch; the validation block overwrites
+                # the last entry on the epochs where it actually runs. NaN so
+                # plots draw a gap rather than a misleading zero.
+                history[k].append(float("nan"))
+                continue
             vals = epoch_losses[k]
             history[k].append(float(np.mean(vals)) if vals else 0.0)
 
@@ -536,7 +565,15 @@ def train(cfg: dict):
                             gt_samples.append(v_real[0].cpu())
 
             val_loss = float(np.mean(val_losses))
-            print(f"  [Val/EMA] L1={val_loss:.4f}")
+            # Overwrite this epoch's NaN placeholder so the gap is recorded.
+            history["val_l1"][-1] = val_loss
+
+            gap = val_loss - history["train_l1"][-1]
+            print(f"  [Val/EMA] L1={val_loss:.4f}  "
+                  f"(train={history['train_l1'][-1]:.4f}, gap={gap:+.4f})")
+            if gap > 0.05 and epoch > train_cfg.get("warmup_epochs", 5) * 3:
+                print(f"  [Val] NOTE: val L1 exceeds train L1 by {gap:.3f}. "
+                      f"A gap that widens over epochs means overfitting.")
 
             save_triplets(sar_samples, pred_samples, gt_samples,
                           sample_dir, prefix=f"epoch{epoch:03d}")
@@ -559,6 +596,7 @@ def train(cfg: dict):
             # pointing at it keeps the exact same behaviour.
             if val_lpips_vals:
                 val_lpips = float(np.mean(val_lpips_vals))
+                history["val_lpips"][-1] = val_lpips
                 print(f"  [Val/EMA] LPIPS={val_lpips:.4f}")
                 if val_lpips < best_val_lpips:
                     best_val_lpips = val_lpips

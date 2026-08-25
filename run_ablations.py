@@ -396,6 +396,11 @@ def main():
     out_dir = cfg["paths"]["output_dir"]
     os.makedirs(out_dir, exist_ok=True)
 
+    pinned_meta = {"epochs": epochs,
+                   "batch_size": cfg["training"]["batch_size"],
+                   "seed": cfg["training"].get("seed", 42),
+                   "n_test": n_test}
+
     results, failed = {}, {}
     for i, ablation in enumerate(ablations, 1):
         print("\n" + "#" * 78)
@@ -403,6 +408,12 @@ def main():
         print("#" * 78)
         try:
             results[ablation] = run_one(cfg, ablation, args)
+            # Rewrite the comparison after every config, not only at the end.
+            # This study runs across several sessions over days, and a table
+            # that only appears once all four have finished is no use at a
+            # review held partway through — nor if the machine is killed
+            # rather than interrupted cleanly.
+            write_report(results, out_dir, pinned_meta)
         except KeyboardInterrupt:
             print("\nInterrupted. Progress is checkpointed — re-run to resume.")
             break
@@ -414,11 +425,7 @@ def main():
             print("Continuing with the remaining configs.\n")
 
     if results:
-        write_report(results, out_dir,
-                     {"epochs": epochs,
-                      "batch_size": cfg["training"]["batch_size"],
-                      "seed": cfg["training"].get("seed", 42),
-                      "n_test": n_test})
+        write_report(results, out_dir, pinned_meta)
 
     if failed:
         print("\nFAILED CONFIGS:")
