@@ -432,12 +432,22 @@ class SARtoEODataset(Dataset):
         else:
             # Terrain-segregated split
             if split == "train":
-                terrains = data_cfg.get("train_terrain", ["agri", "barrenland", "grassland"])
-            elif split == "val":
-                terrains = data_cfg.get("val_terrain", ["urban"])
-            else:
-                terrains = data_cfg.get("test_terrain", ["urban"])
-            return _discover_kaggle_pairs(root, terrains)
+                terrains = data_cfg.get("train_terrain",
+                                        ["agri", "barrenland", "grassland"])
+                return _discover_kaggle_pairs(root, terrains)
+
+            val_t  = data_cfg.get("val_terrain",  ["urban"])
+            test_t = data_cfg.get("test_terrain", ["urban"])
+
+            # The shipped config points val and test at the same terrain, which
+            # would hand back the identical pool for both — validation would then
+            # select checkpoints on the test set. Halve that pool by scene
+            # instead so the two stay independent.
+            if sorted(t.lower() for t in val_t) == sorted(t.lower() for t in test_t):
+                pool = _discover_kaggle_pairs(root, val_t)
+                return self._split_half(pool, split, seed)
+
+            return _discover_kaggle_pairs(root, val_t if split == "val" else test_t)
 
     def _collect_all_kaggle(self, data_cfg: dict) -> List[Tuple[str, str]]:
         """Load ALL Kaggle pairs (all terrains) for combined mode."""
@@ -626,12 +636,50 @@ class SARtoEODataset(Dataset):
     @staticmethod
     def _split_half(pairs: List[Tuple[str, str]], split: str,
                     cfg_seed: int) -> List[Tuple[str, str]]:
-        """50/50 split for SEN1-2 winter val/test."""
-        rng = random.Random(cfg_seed)
-        p   = list(pairs)
-        rng.shuffle(p)
-        mid = len(p) // 2
-        return p[:mid] if split == "val" else p[mid:]
+        """
+        Divide one pool into val and test halves along scene boundaries.
+
+        Needed wherever val and test are configured from the same source — the
+        same season for SEN1-2, the same terrain for the Kaggle set. Returning
+        the identical pool for both makes validation select checkpoints on the
+        test set, so the reported "test" score is the number it was tuned
+        against. That is precisely what the 2025 report's "Test & Validation
+        Splits Identical" caption was describing.
+
+        Halved by scene rather than by patch for the same reason the main split
+        is: tiles from one scene overlap on the ground, so a patch-level halving
+        would leave val and test covering the same terrain.
+        """
+        groups: Dict[str, List[Tuple[str, str]]] = {}
+        for pair in pairs:
+            groups.setdefault(_scene_key(pair[0]), []).append(pair)
+
+        keys = sorted(groups)
+        random.Random(cfg_seed).shuffle(keys)
+
+        if len(keys) < 2:
+            # One scene cannot be divided without putting overlapping ground on
+            # both sides. Fall back to halving by patch, but say so — val and
+            # test will not be independent.
+            print(f"[Split] WARNING: the val/test pool holds only {len(keys)} "
+                  f"scene(s), so it cannot be halved cleanly. Falling back to a "
+                  f"patch-level split — val and test WILL overlap "
+                  f"geographically, and validation scores will flatter the "
+                  f"test result.")
+            p = list(pairs)
+            random.Random(cfg_seed).shuffle(p)
+            mid = len(p) // 2
+            return p[:mid] if split == "val" else p[mid:]
+
+        halves: Dict[str, List[Tuple[str, str]]] = {"val": [], "test": []}
+        target = len(pairs) / 2
+        for key in keys:
+            dest = "val" if len(halves["val"]) < target else "test"
+            halves[dest].extend(groups[key])
+
+        print(f"[Split] val/test halved by scene | {len(keys)} scenes -> "
+              f"val={len(halves['val']):,} test={len(halves['test']):,}")
+        return halves["val" if split == "val" else "test"]
 
     # ---- Dataset interface ------------------------------------------------
 
