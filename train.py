@@ -71,6 +71,45 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
 
 
+def _rng_state() -> dict:
+    """Capture every RNG the data pipeline draws from."""
+    return {
+        "python": random.getstate(),
+        "numpy":  np.random.get_state(),
+        "torch":  torch.get_rng_state(),
+        "cuda":   torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def _restore_rng_state(state: dict) -> bool:
+    """
+    Resume the random streams where the last session left them.
+
+    set_seed() reseeds from the config on entry to train(), so without this a
+    resumed session restarts the sequence: shuffling and augmentation replay
+    exactly what the previous session already saw. A 150-epoch run split into
+    three sessions then yields 50 distinct augmented epochs repeated three
+    times, which quietly undoes most of the augmentation.
+
+    Returns False when the checkpoint predates RNG capture, so the caller can
+    say so rather than pretend the run is continuous.
+    """
+    if not state:
+        return False
+    try:
+        random.setstate(state["python"])
+        np.random.set_state(state["numpy"])
+        torch.set_rng_state(state["torch"].cpu()
+                            if hasattr(state["torch"], "cpu") else state["torch"])
+        if state.get("cuda") and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
+        return True
+    except Exception as e:                      # pragma: no cover - env dependent
+        print(f"[Resume] RNG state could not be restored ({e}); "
+              f"augmentation will replay this session.")
+        return False
+
+
 def load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -390,11 +429,16 @@ def train(cfg: dict):
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         best_val_lpips = ckpt.get("best_val_lpips", float("inf"))
 
+        # Continue the random streams instead of replaying them — see
+        # _restore_rng_state. Must come after set_seed(), which ran on entry.
+        rng_ok = _restore_rng_state(ckpt.get("rng"))
+
         global_step = ckpt.get("global_step", 0)
         start_epoch = ckpt["epoch"] + 1
         print(f"[Resume] Resuming from epoch {start_epoch}/{n_epochs} "
               f"| lr_enc={optim_G.param_groups[0]['lr']:.2e} "
-              f"| best_val={best_val_loss:.4f}")
+              f"| best_val={best_val_loss:.4f} "
+              f"| rng={'continued' if rng_ok else 'RESET (pre-fix checkpoint)'}")
     else:
         print(f"[Train] Starting from scratch")
 
@@ -631,6 +675,9 @@ def train(cfg: dict):
                 "scaler_D":    scaler_D.state_dict() if scaler_D else None,
                 "best_val_loss": best_val_loss,
                 "best_val_lpips": best_val_lpips,
+                # Lets the next session continue the shuffle/augmentation
+                # streams rather than replaying this session's.
+                "rng":         _rng_state(),
                 "history":     history,
                 "meta":        _repr_meta,   # reproducibility
             }, ckpt_path)
@@ -664,6 +711,7 @@ def train(cfg: dict):
                     "scaler_D": scaler_D.state_dict() if scaler_D else None,
                     "best_val_loss": best_val_loss,
                     "best_val_lpips": best_val_lpips,
+                    "rng": _rng_state(),
                     "history": history, "meta": _repr_meta,
                 }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
             why       = "time budget" if hit_time_cap else "epoch budget"
