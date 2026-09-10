@@ -199,9 +199,9 @@ if __name__ == "__main__":
 
     print("Multi-scale discriminator outputs:")
     for i, o in enumerate(out):
-        print(f"  Scale {i} (input {256 // (2**i)}×{256 // (2**i)}): "
+        print(f"  Scale {i} (input {256 // (2**i)}x{256 // (2**i)}): "
               f"output {tuple(o.shape)}")
 
     total_params = sum(p.numel() for p in D.parameters() if p.requires_grad)
     print(f"Total discriminator params: {total_params:,}")
-    print("Discriminator OK. ✓")
+    print("Discriminator OK. OK")

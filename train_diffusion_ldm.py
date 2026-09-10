@@ -84,9 +84,9 @@ class LatentEncoder:
             ).to(device)
             self.vae.requires_grad_(False)
             self.vae.eval()
-            print("  ✓ VAE loaded — diffusion runs in 32×32 latent space")
+            print("  VAE loaded - diffusion runs in 32x32 latent space")
         except ImportError:
-            print("  ⚠ diffusers not found — falling back to pixel space")
+            print("  diffusers not found - falling back to pixel space")
             print("    Install with: pip install diffusers")
             self.latent_channels = 3
 
@@ -284,7 +284,7 @@ def train_ldm(cfg: dict, resume_path: str = None):
     set_seed(cfg["training"].get("seed", 42))
 
     print("=" * 60)
-    print(" SAR2EO Phase 2 — Latent Diffusion Model")
+    print(" SAR2EO Phase 2 - Latent Diffusion Model")
     print(f" Device: {device}")
     print("=" * 60)
 
@@ -306,8 +306,8 @@ def train_ldm(cfg: dict, resume_path: str = None):
     n_sar    = sum(p.numel() for p in sar_encoder.parameters() if p.requires_grad)
     print(f"  LDM UNet:       {n_params/1e6:.1f}M params (trainable)")
     print(f"  SAR encoder:    {n_sar/1e6:.1f}M params (trainable)")
-    print(f"  Latent size:    {lat_ch}×32×32 (vs 3×256×256 in pixel space)")
-    print(f"  Compute saving: {(256*256*3) / (32*32*lat_ch):.0f}× fewer tokens\n")
+    print(f"  Latent size:    {lat_ch}x32x32 (vs 3x256x256 in pixel space)")
+    print(f"  Compute saving: {(256*256*3) / (32*32*lat_ch):.0f}x fewer tokens\n")
 
     # ── Noise scheduler ────────────────────────────────────────────────────
     # DDPM registers its noise schedule as buffers, so it must be moved to the
@@ -486,7 +486,7 @@ def train_ldm(cfg: dict, resume_path: str = None):
                     "sar_enc": sar_encoder.state_dict(),
                     "val_loss": val_loss, "history": history,
                 }, os.path.join(ckpt_dir, "best.pth"))
-                print(f"  ✓ Best LDM checkpoint saved")
+                print(f"  Best LDM checkpoint saved")
 
         if epoch % save_freq == 0:
             torch.save({
@@ -498,7 +498,7 @@ def train_ldm(cfg: dict, resume_path: str = None):
                 "best_loss": best_loss,
             }, os.path.join(ckpt_dir, f"epoch_{epoch:03d}.pth"))
 
-    print(f"\n✓ LDM training done — {(time.time()-t_start)/60:.1f} min")
+    print(f"\nLDM training done - {(time.time()-t_start)/60:.1f} min")
     print(f"  Best val loss: {best_loss:.5f}")
     return unet, sar_encoder
 

@@ -213,6 +213,6 @@ if __name__ == "__main__":
     targets = [torch.randn(3, 256, 256) for _ in range(5)]
 
     results = compute_metrics(preds, targets, device="cpu")
-    print("Metrics (random baseline — expect bad numbers):")
+    print("Metrics (random baseline - expect bad numbers):")
     for k, v in results.items():
         print(f"  {k}: {v:.4f}")

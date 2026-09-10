@@ -79,11 +79,11 @@ def check_gpu(allow_cpu: bool = False) -> str:
     if not torch.cuda.is_available():
         if not allow_cpu:
             raise RuntimeError(
-                "No CUDA device. An ablation study on CPU would take weeks — "
+                "No CUDA device. An ablation study on CPU would take weeks - "
                 "run this on the A5000, or pass --allow-cpu with a tiny "
                 "--epochs/--subset-size to smoke-test the pipeline."
             )
-        print("GPU  : none — running on CPU (--allow-cpu)")
+        print("GPU  : none - running on CPU (--allow-cpu)")
         return "cpu"
     name = torch.cuda.get_device_name(0)
     vram = torch.cuda.get_device_properties(0).total_memory / 1e9
@@ -100,7 +100,7 @@ def audit_split(cfg: dict) -> None:
     from data.dataloader import SARtoEODataset, _scene_key
 
     print("\n" + "=" * 66)
-    print(" LEAKAGE AUDIT — shared split for all ablations")
+    print(" LEAKAGE AUDIT - shared split for all ablations")
     print("=" * 66)
 
     scenes = {}
@@ -119,7 +119,7 @@ def audit_split(cfg: dict) -> None:
 
     if leaked:
         raise RuntimeError(
-            "Split is leaking — test scenes also appear in train. Refusing to "
+            "Split is leaking - test scenes also appear in train. Refusing to "
             "run: every number in the comparison table would be inflated, and "
             "inflated by a different amount per config, so the ranking would "
             "be meaningless too. Set split_strategy: 'scene' in the config."
@@ -129,10 +129,10 @@ def audit_split(cfg: dict) -> None:
     if n_scenes < 20:
         print(f"\n  NOTE: only {n_scenes} scene groups total. If the dataset is "
               f"large, _scene_key probably could not parse a scene id from the "
-              f"filenames and fell back to directory grouping — which makes "
+              f"filenames and fell back to directory grouping - which makes "
               f"this closer to a terrain split. Check a few filenames before "
               f"committing GPU time.")
-    print("  PASSED — splits are scene-disjoint")
+    print("  PASSED - splits are scene-disjoint")
     print("=" * 66)
 
 
@@ -160,7 +160,7 @@ def run_one(base_cfg: dict, ablation: str, args) -> dict:
     if os.path.exists(metrics_csv) and not args.force:
         with open(metrics_csv, encoding="utf-8") as f:
             row = next(csv.DictReader(f))
-        print(f"  Already evaluated — skipping (use --force to redo)")
+        print(f"  Already evaluated - skipping (use --force to redo)")
         return {k: float(row[k]) for k in ("lpips", "fid", "ssim", "psnr")}
 
     make_dirs(cfg)
@@ -276,7 +276,7 @@ def write_report(results: dict, out_dir: str, pinned: dict) -> None:
     print(f"  markdown -> {md_path}")
 
     print("\n" + "=" * 78)
-    print(" ABLATION RESULTS — scene-disjoint test split")
+    print(" ABLATION RESULTS - scene-disjoint test split")
     print("=" * 78)
     print(f"{'Configuration':<22}{'LPIPS':>10}{'FID':>10}{'SSIM':>10}"
           f"{'PSNR':>10}{'train':>10}")
@@ -333,7 +333,7 @@ def main():
     p.add_argument("--batch-size", "--batch_size", type=int, default=None,
                    help="override batch size; A5000 24GB handles 16")
     p.add_argument("--subset-size", "--subset_size", type=int, default=None,
-                   help="train on N pairs per split — for quick pilot runs")
+                   help="train on N pairs per split - for quick pilot runs")
     p.add_argument("--num-workers", "--num_workers", type=int, default=None,
                    help="DataLoader workers. The config default (4) is sized "
                         "for Kaggle's 2-core boxes; on a workstation use about "
@@ -415,7 +415,7 @@ def main():
             # rather than interrupted cleanly.
             write_report(results, out_dir, pinned_meta)
         except KeyboardInterrupt:
-            print("\nInterrupted. Progress is checkpointed — re-run to resume.")
+            print("\nInterrupted. Progress is checkpointed - re-run to resume.")
             break
         except Exception as e:
             # One config failing (OOM, say) should not discard the others.

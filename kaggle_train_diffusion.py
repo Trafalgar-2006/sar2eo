@@ -20,11 +20,11 @@ else:
     )
 sys.path.insert(0, REPO)
 os.chdir(REPO)
-print("✓ Repo ready")
+print("Repo ready")
 
 # ── 2. Install deps ──────────────────────────────────────────────────────────
 subprocess.run("pip install -q lpips diffusers transformers accelerate", shell=True, check=True)
-print("✓ Deps installed (includes diffusers for SD-1.5 VAE)")
+print("Deps installed (includes diffusers for SD-1.5 VAE)")
 
 # ── 3. Restore Phase 1 GAN best.pth if provided as input ────────────────────
 # Add your Phase 1 Kaggle output as an Input Dataset before running
@@ -38,7 +38,7 @@ for dirpath, _, filenames in os.walk("/kaggle/input"):
             dst = os.path.join(GAN_CKPT, "best.pth")
             if not os.path.exists(dst):
                 shutil.copy2(src, dst)
-                print(f"✓ Restored GAN best.pth from: {dirpath}")
+                print(f"Restored GAN best.pth from: {dirpath}")
 
 # ── 4. Auto-discover dataset ─────────────────────────────────────────────────
 INPUT_ROOT  = "/kaggle/input"
@@ -51,8 +51,8 @@ for dirpath, dirnames, _ in os.walk(INPUT_ROOT):
         break
 
 if KAGGLE_DATA is None:
-    raise RuntimeError("❌ Dataset not found — add Sentinel-1&2 dataset as Input")
-print(f"✓ Dataset: {KAGGLE_DATA}")
+    raise RuntimeError("Dataset not found - add Sentinel-1&2 dataset as Input")
+print(f"Dataset: {KAGGLE_DATA}")
 
 # ── 5. Write config ──────────────────────────────────────────────────────────
 import yaml
@@ -94,7 +94,7 @@ cfg = {
 CFG_PATH = "/kaggle/working/config_diffusion.yaml"
 with open(CFG_PATH, "w", encoding="utf-8") as f:
     yaml.dump(cfg, f)
-print(f"✓ Config written: {CFG_PATH}")
+print(f"Config written: {CFG_PATH}")
 
 # ── 6. Auto-resume LDM from previous session ─────────────────────────────────
 import glob, re
@@ -106,7 +106,7 @@ for dirpath, _, filenames in os.walk("/kaggle/input"):
     pth_files = [f for f in filenames if f.endswith(".pth") and "epoch_" in f
                  and "diffusion" in dirpath.lower()]
     if pth_files:
-        print(f"✓ Found previous LDM checkpoints: {dirpath}")
+        print(f"Found previous LDM checkpoints: {dirpath}")
         for f in pth_files:
             dst = os.path.join(LDM_CKPT_DIR, f)
             if not os.path.exists(dst):
@@ -116,7 +116,7 @@ for dirpath, _, filenames in os.walk("/kaggle/input"):
 
 # ── 7. TRAIN LDM ─────────────────────────────────────────────────────────────
 print("\n" + "="*60)
-print(" PHASE 2 — Latent Diffusion Model (SD-1.5 VAE + UNet)")
+print(" PHASE 2 - Latent Diffusion Model (SD-1.5 VAE + UNet)")
 print("="*60)
 
 from train_diffusion_ldm import train_ldm
@@ -125,12 +125,12 @@ with open(CFG_PATH, encoding="utf-8") as f:
     loaded_cfg = yaml.safe_load(f)
 
 unet, sar_enc = train_ldm(loaded_cfg)
-print("\n✓ LDM Training complete!")
+print("\nLDM Training complete!")
 
 # ── 8. Quick visual evaluation ───────────────────────────────────────────────
-print("\n📁 Key files to download:")
+print("\nKey files to download:")
 print("  checkpoints/diffusion_ldm/best.pth")
 print("  outputs/losses_diffusion_ldm.csv")
 print("  outputs/diffusion_ldm_samples/  (visual samples per epoch)")
 
-print("\n✅ SAVE VERSION NOW to preserve diffusion checkpoints!")
+print("\nSAVE VERSION NOW to preserve diffusion checkpoints!")

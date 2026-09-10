@@ -339,4 +339,4 @@ if __name__ == "__main__":
     same_loss = msss(pred, pred.clone()).item()
     print(f"MS-SSIM (pred vs pred): {same_loss:.6f}  (should be ~0)")
     assert same_loss < 0.01, f"MS-SSIM should be ~0 for identical images, got {same_loss}"
-    print("All losses OK. ✓")
+    print("All losses OK. OK")

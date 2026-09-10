@@ -172,7 +172,7 @@ if __name__ == "__main__":
     original_w = model.weight.data.clone()
     with ema.apply(model):
         assert torch.allclose(model.weight.data, ema.shadow.weight.data)
-        print("\nInside ema.apply: model has EMA weights ✓")
+        print("\nInside ema.apply: model has EMA weights OK")
     assert torch.allclose(model.weight.data, original_w)
-    print("After ema.apply: model restored to live weights ✓")
+    print("After ema.apply: model restored to live weights OK")
     print("EMA OK.")

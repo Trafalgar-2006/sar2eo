@@ -201,9 +201,9 @@ def train_controlnet(cfg: dict, resume_path: str = None):
             best_loss = mean_loss
             controlnet.save_pretrained(os.path.join(ckpt_dir, "best_controlnet"))
             torch.save(sar_cond.state_dict(), os.path.join(ckpt_dir, "best_sar_cond.pth"))
-            print(f"  ✓ Best checkpoint saved (loss={best_loss:.5f})")
+            print(f"  Best checkpoint saved (loss={best_loss:.5f})")
 
-    print(f"\n✓ ControlNet training done — {(time.time()-t_start)/60:.1f} min")
+    print(f"\nControlNet training done - {(time.time()-t_start)/60:.1f} min")
     print(f"  Best checkpoint: {ckpt_dir}/best_controlnet/")
 
 

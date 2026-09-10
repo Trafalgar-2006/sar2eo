@@ -165,9 +165,9 @@ def eval_per_terrain(cfg: dict, weights_path: str):
 
     # ── Print summary table ───────────────────────────────────────────────
     print("\n" + "="*60)
-    print(f"  PER-TERRAIN RESULTS — {weights_path.split('/')[-1]}")
+    print(f"  PER-TERRAIN RESULTS - {weights_path.split('/')[-1]}")
     print("="*60)
-    print(f"{'Terrain':<14} {'SSIM↑':>8} {'PSNR↑':>9} {'LPIPS↓':>9} {'N':>6}")
+    print(f"{'Terrain':<14} {'SSIM^':>8} {'PSNR^':>9} {'LPIPSv':>9} {'N':>6}")
     print("-"*60)
     for t, m in sorted(results.items()):
         print(f"{t:<14} {m['ssim']:>8.4f} {m['psnr']:>8.2f}dB {m['lpips']:>9.4f} {m['n']:>6}")
@@ -188,7 +188,7 @@ def eval_per_terrain(cfg: dict, weights_path: str):
         writer.writeheader()
         for t, m in sorted(results.items()):
             writer.writerow({"terrain": t, **m})
-    print(f"\n[✓] CSV saved → {csv_path}")
+    print(f"\n[OK] CSV saved -> {csv_path}")
 
     # ── Bar chart ─────────────────────────────────────────────────────────
     terrains = sorted(results.keys())
@@ -220,8 +220,8 @@ def eval_per_terrain(cfg: dict, weights_path: str):
     png_path = os.path.join(out_dir, "metrics_per_terrain.png")
     plt.savefig(png_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[✓] Chart saved → {png_path}")
-    print(f"[✓] Triplets saved → {triplet_dir}/")
+    print(f"[OK] Chart saved -> {png_path}")
+    print(f"[OK] Triplets saved -> {triplet_dir}/")
 
     return results
 

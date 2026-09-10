@@ -43,20 +43,20 @@ def deploy(weights_path: str, token: str, dry_run: bool = False):
     PROJECT_DIR = Path(__file__).parent
 
     print("=" * 55)
-    print("  SAR2EO → HuggingFace Space Deploy")
+    print("  SAR2EO -> HuggingFace Space Deploy")
     print(f"  Target: huggingface.co/spaces/{SPACE_ID}")
     print("=" * 55)
 
     # Validate weights
     if not os.path.exists(weights_path):
-        print(f"\n❌ Weights not found: {weights_path}")
+        print(f"\nWeights not found: {weights_path}")
         print("  Download best.pth from Kaggle output first.")
         return
 
-    print(f"\n✓ Weights found: {weights_path} ({os.path.getsize(weights_path)/1e6:.1f} MB)")
+    print(f"\nWeights found: {weights_path} ({os.path.getsize(weights_path)/1e6:.1f} MB)")
 
     if dry_run:
-        print("\n[DRY RUN] Would deploy — pass --no-dry-run to actually push")
+        print("\n[DRY RUN] Would deploy - pass --no-dry-run to actually push")
         return
 
     # 1. Clone / clean space repo
@@ -83,7 +83,7 @@ def deploy(weights_path: str, token: str, dry_run: bool = False):
         dst_path = SPACE_DIR / dst
         dst_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dst_path)
-        print(f"  Copied: {src} → {dst}")
+        print(f"  Copied: {src} -> {dst}")
 
     # 4. Copy model source files (generator, attention, etc.)
     print("\n[4/5] Copying model source ...")
@@ -123,7 +123,7 @@ def deploy(weights_path: str, token: str, dry_run: bool = False):
         run(cmd, cwd=str(SPACE_DIR))
 
     print(f"\n{'='*55}")
-    print(f"  ✅ DEPLOYED!")
+    print(f"  DEPLOYED!")
     print(f"  Space: https://huggingface.co/spaces/{SPACE_ID}")
     print(f"  It will build for ~3-5 minutes, then go live.")
     print(f"{'='*55}")

@@ -158,12 +158,12 @@ def evaluate_dirs(pred_dir: str, gt_dir: str,
     metrics["fid"] = compute_fid(pred_dir, gt_dir, device=device)
 
     print(f"\n{'='*50}")
-    print(f" Evaluation — {split}")
+    print(f" Evaluation - {split}")
     print(f"{'='*50}")
-    print(f"  LPIPS ↓ : {metrics['lpips']:.4f}   (primary)")
-    print(f"  FID   ↓ : {metrics['fid']:.2f}   (primary)")
-    print(f"  SSIM  ↑ : {metrics['ssim']:.4f}   (secondary)")
-    print(f"  PSNR  ↑ : {metrics['psnr']:.2f} dB (secondary)")
+    print(f"  LPIPS (lower better) : {metrics['lpips']:.4f}   [primary]")
+    print(f"  FID   (lower better) : {metrics['fid']:.2f}   [primary]")
+    print(f"  SSIM  (higher better): {metrics['ssim']:.4f}   [secondary]")
+    print(f"  PSNR  (higher better): {metrics['psnr']:.2f} dB [secondary]")
     print(f"{'='*50}\n")
 
     import csv
@@ -173,7 +173,7 @@ def evaluate_dirs(pred_dir: str, gt_dir: str,
         writer.writerow(["split", "lpips", "fid", "ssim", "psnr"])
         writer.writerow([split, metrics["lpips"], metrics["fid"],
                          metrics["ssim"],  metrics["psnr"]])
-    print(f"[Eval] Results → {output_path}")
+    print(f"[Eval] Results -> {output_path}")
     return metrics
 
 

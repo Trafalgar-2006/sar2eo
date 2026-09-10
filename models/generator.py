@@ -396,4 +396,4 @@ if __name__ == "__main__":
 
     assert out.shape == (2, 3, 256, 256), "Output shape mismatch!"
     assert out.min() >= -1.0 and out.max() <= 1.0, "Output range mismatch!"
-    print("Generator OK. ✓")
+    print("Generator OK. OK")

@@ -186,17 +186,17 @@ def plot_results(cfg: dict, compare_model: Optional[str] = None):
     save_path = os.path.join(out_dir, "results_summary.png")
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"✓ Results summary saved → {save_path}")
+    print(f"Results summary saved -> {save_path}")
 
     # ── Print metric table ────────────────────────────────────────────────
     if metrics:
         print("\n" + "="*45)
         print("  FINAL TEST METRICS")
         print("="*45)
-        print(f"  SSIM  ↑ : {metrics.get('ssim',  0):.4f}")
-        print(f"  PSNR  ↑ : {metrics.get('psnr',  0):.2f} dB")
-        print(f"  LPIPS ↓ : {metrics.get('lpips', 0):.4f}")
-        print(f"  FID   ↓ : {metrics.get('fid',   0):.2f}")
+        print(f"  SSIM  ^ : {metrics.get('ssim',  0):.4f}")
+        print(f"  PSNR  ^ : {metrics.get('psnr',  0):.2f} dB")
+        print(f"  LPIPS v : {metrics.get('lpips', 0):.4f}")
+        print(f"  FID   v : {metrics.get('fid',   0):.2f}")
         print("="*45)
 
     return save_path

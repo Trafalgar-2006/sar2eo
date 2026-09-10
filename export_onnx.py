@@ -58,7 +58,7 @@ def export_onnx(
     G.eval()
 
     meta = ckpt.get("meta", {})
-    print(f"✓ Model loaded from: {weights_path}")
+    print(f"Model loaded from: {weights_path}")
     if meta:
         print(f"  Trained at commit: {meta.get('git_commit', 'N/A')}")
         print(f"  PyTorch version:   {meta.get('torch_version', 'N/A')}")
@@ -85,7 +85,7 @@ def export_onnx(
         verbose=False,
     )
     size_mb = os.path.getsize(output_path) / 1e6
-    print(f"✓ ONNX model saved: {output_path} ({size_mb:.1f} MB)")
+    print(f"ONNX model saved: {output_path} ({size_mb:.1f} MB)")
 
     # ── Verify ONNX output matches PyTorch ───────────────────────────────
     try:
@@ -95,9 +95,9 @@ def export_onnx(
         pt_out   = G(dummy).detach().numpy()
         ort_out  = sess.run(None, {"sar_input": dummy_np})[0]
         max_diff = np.abs(pt_out - ort_out).max()
-        print(f"✓ ONNX verification: max diff PyTorch vs ONNX = {max_diff:.6f}")
+        print(f"ONNX verification: max diff PyTorch vs ONNX = {max_diff:.6f}")
         if max_diff > 1e-3:
-            print("  ⚠ Diff > 1e-3 — check for non-deterministic ops")
+            print("  Diff > 1e-3 - check for non-deterministic ops")
     except ImportError:
         print("  (Install onnxruntime to verify: pip install onnxruntime)")
 
@@ -108,13 +108,13 @@ def export_onnx(
             from onnxruntime.quantization import quantize_dynamic, QuantType
             quantize_dynamic(output_path, quant_path, weight_type=QuantType.QInt8)
             size_q = os.path.getsize(quant_path) / 1e6
-            print(f"✓ Quantized model: {quant_path} ({size_q:.1f} MB)")
-            print(f"  Compression: {size_mb:.1f}MB → {size_q:.1f}MB "
+            print(f"Quantized model: {quant_path} ({size_q:.1f} MB)")
+            print(f"  Compression: {size_mb:.1f}MB -> {size_q:.1f}MB "
                   f"({100*(1-size_q/size_mb):.0f}% smaller)")
         except ImportError:
             print("  (Install onnxruntime for quantization)")
 
-    print("\n✓ ONNX export complete!")
+    print("\nONNX export complete!")
     print(f"  Production model: {output_path}")
     if quantize:
         print(f"  Quantized model:  {quant_path}")

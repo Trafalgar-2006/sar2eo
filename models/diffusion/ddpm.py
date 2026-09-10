@@ -288,7 +288,7 @@ if __name__ == "__main__":
     x0 = torch.randn(B, 3, 256, 256)
     t  = torch.randint(0, 1000, (B,))
     xt, noise = ddpm.q_sample(x0, t)
-    print(f"q_sample: x0={x0.shape} → xt={xt.shape}")
+    print(f"q_sample: x0={x0.shape} -> xt={xt.shape}")
     print(f"xt range: [{xt.min():.2f}, {xt.max():.2f}]")
 
     dummy_pred = torch.randn_like(xt)

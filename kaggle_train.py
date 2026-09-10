@@ -16,11 +16,11 @@ else:
     )
 sys.path.insert(0, REPO)
 os.chdir(REPO)
-print("✓ Repo ready")
+print("Repo ready")
 
 # ── 2. Install extra deps ─────────────────────────────────────────────────────
 subprocess.run("pip install -q lpips pytorch-fid", shell=True, check=True)
-print("✓ Deps installed")
+print("Deps installed")
 
 # ── 2.5 Auto-resume: restore checkpoints from previous Kaggle session ─────────
 # If you add a previous session's output as an input dataset, this copies
@@ -32,7 +32,7 @@ resumed = False
 for dirpath, dirnames, filenames in os.walk("/kaggle/input"):
     pth_files = [f for f in filenames if f.endswith(".pth")]
     if pth_files:
-        print(f"✓ Found previous checkpoints in: {dirpath}")
+        print(f"Found previous checkpoints in: {dirpath}")
         for f in pth_files:
             src = os.path.join(dirpath, f)
             dst = os.path.join(CKPT_DST, f)
@@ -46,7 +46,7 @@ if resumed:
     latest = sorted([f for f in os.listdir(CKPT_DST) if f.startswith("epoch_")])
     print(f"  Will resume from: {latest[-1] if latest else 'best.pth'}")
 else:
-    print("  No previous checkpoints found — starting from scratch")
+    print("  No previous checkpoints found - starting from scratch")
 
 # ── 3. Auto-discover dataset path (searches ANY depth) ───────────────────────
 INPUT_ROOT  = "/kaggle/input"
@@ -59,13 +59,13 @@ for dirpath, dirnames, _ in os.walk(INPUT_ROOT):
     subdirs = {d.lower() for d in dirnames}
     if len(subdirs & TERRAIN_KEYS) >= 2:   # ≥2 terrain folders = it's the dataset root
         KAGGLE_DATA = dirpath
-        print(f"✓ Dataset found at: {KAGGLE_DATA}")
+        print(f"Dataset found at: {KAGGLE_DATA}")
         print(f"  Terrain folders : {sorted(subdirs & TERRAIN_KEYS)}")
         break
 
 if KAGGLE_DATA is None:
     # Print full tree so user knows exactly what's mounted
-    print("\n❌ Could not find terrain dataset. Full /kaggle/input tree:")
+    print("\nCould not find terrain dataset. Full /kaggle/input tree:")
     for dirpath, dirnames, _ in os.walk(INPUT_ROOT):
         depth = dirpath.replace(INPUT_ROOT, "").count(os.sep)
         if depth > 4:
@@ -73,12 +73,12 @@ if KAGGLE_DATA is None:
         indent = "  " * depth
         print(f"{indent}{os.path.basename(dirpath)}/")
     raise FileNotFoundError(
-        "Terrain dataset not found. Go to Kaggle Notebook → Add Input → "
+        "Terrain dataset not found. Go to Kaggle Notebook -> Add Input -> "
         "search 'sentinel12-image-pairs-segregated-by-terrain' and add it."
     )
 
 # ── 4. Verify GPU ─────────────────────────────────────────────────────────
-print(f"\n✓ CUDA: {torch.cuda.is_available()}")
+print(f"\nCUDA: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"  GPU : {torch.cuda.get_device_name(0)}")
     print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
@@ -171,7 +171,7 @@ config = {
 CFG_PATH = f"{REPO}/config_kaggle.yaml"
 with open(CFG_PATH, "w", encoding="utf-8") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-print(f"✓ Config written → {CFG_PATH}")
+print(f"Config written -> {CFG_PATH}")
 
 # ── 6. Quick smoke test ───────────────────────────────────────────────────
 from models.generator     import UNetGenerator
@@ -187,11 +187,11 @@ with torch.no_grad():
         disc = D(torch.randn(2, 1, 256, 256).to(device),
                  torch.randn(2, 3, 256, 256).to(device))
 
-print(f"✓ G output: {out.shape}, range=[{out.min():.2f},{out.max():.2f}]")
-print(f"✓ D scales: {[tuple(d.shape) for d in disc]}")
-print(f"✓ G params: {sum(p.numel() for p in G.parameters()):,}")
+print(f"G output: {out.shape}, range=[{out.min():.2f},{out.max():.2f}]")
+print(f"D scales: {[tuple(d.shape) for d in disc]}")
+print(f"G params: {sum(p.numel() for p in G.parameters()):,}")
 vram_used = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0
-print(f"✓ VRAM (smoke test): {vram_used:.2f} GB")
+print(f"VRAM (smoke test): {vram_used:.2f} GB")
 del G, D, out, disc
 torch.cuda.empty_cache()
 
@@ -201,7 +201,7 @@ torch.cuda.empty_cache()
 from data.dataloader import SARtoEODataset, _scene_key
 
 print("\n" + "="*60)
-print(" LEAKAGE AUDIT — scene overlap between splits")
+print(" LEAKAGE AUDIT - scene overlap between splits")
 print("="*60)
 
 _audit_cfg = yaml.safe_load(open(CFG_PATH, encoding="utf-8"))
@@ -219,7 +219,7 @@ for _a, _b in [("train", "val"), ("train", "test"), ("val", "test")]:
 
 if _leaked:
     raise RuntimeError(
-        "Split is leaking — test scenes also appear in train. "
+        "Split is leaking - test scenes also appear in train. "
         "Refusing to train: the resulting metrics would be meaningless. "
         "Check that split_strategy is 'scene' in the config above."
     )
@@ -252,27 +252,27 @@ PER_RUN = cfg["training"]["session_epoch_limit"]
 this_session = min(PER_RUN, TOTAL - last_epoch)
 
 if last_epoch:
-    print(f"🔄 RESUMING — {last_epoch}/{TOTAL} epochs done")
+    print(f"RESUMING - {last_epoch}/{TOTAL} epochs done")
 else:
-    print(f"🚀 FRESH START — target {TOTAL} epochs")
+    print(f"FRESH START - target {TOTAL} epochs")
 print(f"   This session: {this_session} epoch(s) "
-      f"({last_epoch + 1} → {last_epoch + this_session})")
+      f"({last_epoch + 1} -> {last_epoch + this_session})")
 print(f"   save_freq=5 | val_freq=10")
 if last_epoch + this_session < TOTAL:
-    print(f"   ⚠️  Before the 12-hr mark, click 'Save Version' in Kaggle,")
+    print(f"    Before the 12-hr mark, click 'Save Version' in Kaggle,")
     print(f"      then add this notebook's output as an Input next session.")
 
 print("\n" + "="*60)
-print(" TRAINING — ResNet50-UNet + CBAM + Multi-Scale PatchGAN")
+print(" TRAINING - ResNet50-UNet + CBAM + Multi-Scale PatchGAN")
 print("="*60 + "\n")
 
 G = train(cfg)
-print("\n✓ Training complete!")
+print("\nTraining complete!")
 
 # ── Post-training: remind user to Save Version ────────────────────────────
 if last_epoch + this_session < TOTAL:
     print("\n" + "="*60)
-    print(" ✅  SESSION COMPLETE — SAVE VERSION NOW")
+    print("  SESSION COMPLETE - SAVE VERSION NOW")
     print("="*60)
     print("  1. Click 'Save Version' (top-right) to preserve outputs")
     print("  2. This saves checkpoints/full/*.pth and all outputs")
@@ -310,10 +310,10 @@ print("="*50)
 # best_lpips.pth is the perceptually-selected checkpoint (best.pth is val-L1).
 # Score it too when it exists, and sweep final/epoch checkpoints if you want:
 #   python eval.py --config config_kaggle.yaml --weights checkpoints/full/best_lpips.pth --split test
-print("\n✓ Done! Download outputs from /kaggle/working/")
+print("\nDone! Download outputs from /kaggle/working/")
 
 # Files to download:
-print("\n📁 Key files to download:")
+print("\nKey files to download:")
 print("  checkpoints/full/best.pth  (+ best_lpips.pth if validation ran)")
 print("  outputs/losses_full.csv")
 print("  outputs/metrics_val.csv + outputs/metrics_test.csv")

@@ -255,7 +255,7 @@ def train(cfg: dict):
           f"cuda={torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
 
     print(f"{'='*65}")
-    print(f" SAR-to-EO Training — Peak Performance Build")
+    print(f" SAR-to-EO Training - Peak Performance Build")
     print(f" Ablation : {ablation}")
     print(f" Device   : {device}")
     print(f"{'='*65}")
@@ -633,7 +633,7 @@ def train(cfg: dict):
                     "val_loss": val_loss,
                     "meta":     _repr_meta,   # reproducibility
                 }, best_path)
-                print(f"  [Val] ✓ Best checkpoint saved → {best_path}")
+                print(f"  [Val] Best checkpoint saved -> {best_path}")
 
             # OQ-5 (additive): a second checkpoint selected on perception,
             # not pixels. best.pth above is untouched - anything already
@@ -654,7 +654,7 @@ def train(cfg: dict):
                         "val_lpips":  val_lpips,
                         "meta":       _repr_meta,
                     }, lpips_path)
-                    print(f"  [Val] ✓ Best LPIPS checkpoint saved → {lpips_path}")
+                    print(f"  [Val] Best LPIPS checkpoint saved -> {lpips_path}")
 
         # ---- Periodic checkpoint -------------------------------------------
         if epoch % save_freq == 0:
@@ -681,7 +681,7 @@ def train(cfg: dict):
                 "history":     history,
                 "meta":        _repr_meta,   # reproducibility
             }, ckpt_path)
-            print(f"  [Ckpt] Saved → {ckpt_path}")
+            print(f"  [Ckpt] Saved -> {ckpt_path}")
 
         # ---- Stop early if this session has run its quota -------------------
         # Kaggle kills a session at 12h, so long runs are split across sessions.
@@ -720,7 +720,7 @@ def train(cfg: dict):
                   f"in {mins_elapsed:.1f} min, at epoch {epoch}/{n_epochs}.")
             print(f"[Session] {remaining} epoch(s) left, "
                   f"~{remaining * mean_epoch / 60:.1f} h at {mean_epoch:.1f} min/epoch.")
-            print(f"[Session] Rerun the same command to resume at epoch {epoch + 1} — "
+            print(f"[Session] Rerun the same command to resume at epoch {epoch + 1} - "
                   f"optimiser, LR schedule and best-so-far are all restored.")
             return G
 
@@ -733,7 +733,7 @@ def train(cfg: dict):
         "D":       D.state_dict() if D else None,
         "history": history,
     }, final_path)
-    print(f"\n[Done] Final checkpoint → {final_path}")
+    print(f"\n[Done] Final checkpoint -> {final_path}")
     print(f"[Done] Total training time: {(time.time()-t_start)/60:.1f} min")
 
     # ---- Save loss curves ---------------------------------------------------

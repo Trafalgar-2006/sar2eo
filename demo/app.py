@@ -88,7 +88,7 @@ def _load_model():
 print(f"[Demo] Loading model on {DEVICE}...")
 try:
     MODEL = _load_model()
-    print(f"[Demo] Model ready ✓")
+    print(f"[Demo] Model ready OK")
     MODEL_LOADED = True
 except FileNotFoundError as e:
     print(f"[Demo] WARNING: {e}")

@@ -299,7 +299,7 @@ def train(cfg: dict, resume_path: str = None):
                     "epoch": epoch, "model": model.state_dict(),
                     "ema":   ema.state_dict(), "val_loss": val_loss,
                 }, os.path.join(ckpt_dir, "best.pth"))
-                print(f"  ✓ Best checkpoint saved (val={val_loss:.4f})")
+                print(f"  Best checkpoint saved (val={val_loss:.4f})")
 
         # ── Periodic save ────────────────────────────────────────────────────
         if epoch % save_freq == 0:
@@ -321,7 +321,7 @@ def train(cfg: dict, resume_path: str = None):
         "epoch": n_epochs, "model": model.state_dict(),
         "ema":   ema.state_dict(), "history": history,
     }, os.path.join(ckpt_dir, "final.pth"))
-    print(f"\n✓ Diffusion training done — {(time.time()-t_start)/60:.1f} min")
+    print(f"\nDiffusion training done - {(time.time()-t_start)/60:.1f} min")
 
 
 # ---------------------------------------------------------------------------

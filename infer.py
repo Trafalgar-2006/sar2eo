@@ -128,9 +128,9 @@ def load_sar_image(path: str, strict: bool = True) -> torch.Tensor:
 
     if strict and img.size != (256, 256):
         raise ValueError(
-            f"Input image must be exactly 256×256 pixels, "
-            f"but got {img.size[0]}×{img.size[1]} for: {path}\n"
-            f"Pre-process your SAR patches to 256×256 before running infer.py."
+            f"Input image must be exactly 256x256 pixels, "
+            f"but got {img.size[0]}x{img.size[1]} for: {path}\n"
+            f"Pre-process your SAR patches to 256x256 before running infer.py."
         )
 
     arr    = np.array(img, dtype=np.float32) / 255.0   # [0, 1]
@@ -311,7 +311,7 @@ def run_inference(
         device = torch.device(device_str)
     print(f"[Infer] Device: {device}")
     if use_tta:
-        print(f"[Infer] TTA enabled (4× rotations, ~4× slower)")
+        print(f"[Infer] TTA enabled (4x rotations, ~4x slower)")
 
     # Validate input
     input_dir  = Path(input_dir)
@@ -327,7 +327,7 @@ def run_inference(
         sys.exit(1)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[Infer] {len(sar_files)} SAR patches → {output_dir}")
+    print(f"[Infer] {len(sar_files)} SAR patches -> {output_dir}")
 
     # Load model
     print(f"[Infer] Loading model from {weights_path}...")
@@ -343,7 +343,7 @@ def run_inference(
     # without the caller having to pre-cut it.
     oversized = [f for f in sar_files if Image.open(f).size != (256, 256)]
     if oversized:
-        print(f"[Infer] {len(oversized)} image(s) are not 256×256 — using "
+        print(f"[Infer] {len(oversized)} image(s) are not 256x256 - using "
               f"strided tiling (tile={tile}, stride={stride})")
         for f in oversized:
             sar = load_sar_image(str(f), strict=False).unsqueeze(0).to(device)
@@ -373,7 +373,7 @@ def run_inference(
         if (i // batch_size) % 10 == 0:
             print(f"  {n_done}/{n_total} patches done...")
 
-    print(f"\n[Infer] Done. {n_done} EO images written → {output_dir}")
+    print(f"\n[Infer] Done. {n_done} EO images written -> {output_dir}")
 
     if device.type == "cuda":
         vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
@@ -399,7 +399,7 @@ if __name__ == "__main__":
     # underscores are what this repo shipped with. argparse derives `dest` from
     # the first option string, so args.input_dir etc. are unchanged.
     parser.add_argument("--input-dir", "--input_dir", required=True,
-                        help="Directory of 256×256 8-bit PNG SAR patches")
+                        help="Directory of 256x256 8-bit PNG SAR patches")
     parser.add_argument("--output-dir", "--output_dir", required=True,
                         help="Output directory for generated RGB EO PNGs")
     parser.add_argument("--weights",      required=True,
@@ -416,7 +416,7 @@ if __name__ == "__main__":
                         help="step between windows (default 192 = 25%% overlap). "
                              "Smaller is smoother but costs (tile/stride)^2 passes")
     parser.add_argument("--tta",          action="store_true",
-                        help="Enable test-time augmentation (4× rotations, better quality)")
+                        help="Enable test-time augmentation (4x rotations, better quality)")
 
     args = parser.parse_args()
     run_inference(

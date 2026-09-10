@@ -171,7 +171,7 @@ def _discover_sen12_pairs_cached(root: str,
     pairs: List[Tuple[str, str]] = []
     root_path = Path(root)
     if not root_path.exists():
-        print(f"[WARNING] SEN1-2 root not found: {root} — skipping")
+        print(f"[WARNING] SEN1-2 root not found: {root} - skipping")
         return pairs
 
     for scene_dir in sorted(root_path.iterdir()):
@@ -213,7 +213,7 @@ def _discover_kaggle_pairs(root: str,
     call so callers can freely mutate/reorder without corrupting the cache.
     """
     if root is None:
-        raise ValueError("kaggle_root is None — dataset not mounted.")
+        raise ValueError("kaggle_root is None - dataset not mounted.")
     return list(_discover_kaggle_pairs_cached(root, tuple(terrains or [])))
 
 
@@ -226,7 +226,7 @@ def _discover_kaggle_pairs_cached(root: str,
     """
     root_path = Path(root)
     if not root_path.exists():
-        print(f"[WARNING] Kaggle root not found: {root} — skipping")
+        print(f"[WARNING] Kaggle root not found: {root} - skipping")
         return ()
 
     IMAGE_EXTS = ("*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg")
@@ -254,7 +254,7 @@ def _discover_kaggle_pairs_cached(root: str,
         terrain_lower = {t.lower() for t in terrains}
         terrain_dirs  = [d for d in all_subdirs if d.name.lower() in terrain_lower]
         if not terrain_dirs:
-            print(f"[INFO] Requested terrains {terrains} not found — using all")
+            print(f"[INFO] Requested terrains {terrains} not found - using all")
             terrain_dirs = all_subdirs
     else:
         terrain_dirs = all_subdirs
@@ -276,7 +276,7 @@ def _discover_kaggle_pairs_cached(root: str,
             if sub_s1 is not None:
                 resolved.append((f"{tdir.name}/{sub.name}", sub_s1, sub_s2))
         if not any(name.startswith(f"{tdir.name}/") for name, _, _ in resolved):
-            print(f"[WARNING] No s1/s2 dirs in '{tdir.name}' — skipping")
+            print(f"[WARNING] No s1/s2 dirs in '{tdir.name}' - skipping")
 
     pairs: List[Tuple[str, str]] = []
     for tdir_name, s1_dir, s2_dir in resolved:
@@ -301,11 +301,11 @@ def _discover_kaggle_pairs_cached(root: str,
             sample = ", ".join(f"{a.name}<->{b.name}"
                                 for a, b in zip(s1_files[:3], s2_files[:3]))
             print(f"[WARNING] Pairing '{tdir_name}' by SORTED INDEX (no "
-                  f"filename match) — verify these look right: {sample}")
+                  f"filename match) - verify these look right: {sample}")
             pairs.extend([(str(a), str(b)) for a, b in zip(s1_files, s2_files)])
         else:
             print(f"[WARNING] '{tdir_name}': count mismatch s1={len(s1_files)} "
-                  f"vs s2={len(s2_files)} — skipping")
+                  f"vs s2={len(s2_files)} - skipping")
 
     print(f"[INFO] Kaggle total: {len(pairs)} pairs")
     return tuple(pairs)
@@ -515,7 +515,7 @@ class SARtoEODataset(Dataset):
                     f"{_scene_key(first_unparsed)!r}) while dataset_type is "
                     f"'combined'. A directory-fallback key cannot prove this "
                     f"ground doesn't also appear under the OTHER root's "
-                    f"ROIs-based key — see DATA_AUDIT.md §1c. Fix the "
+                    f"ROIs-based key - see DATA_AUDIT.md sec 1c. Fix the "
                     f"filenames to the 'ROIs{{id}}_{{season}}_s{{1,2}}_"
                     f"{{scene}}_p{{patch}}' convention, or use dataset_type "
                     f"'sen12'/'kaggle' alone instead of 'combined'."
@@ -532,7 +532,7 @@ class SARtoEODataset(Dataset):
         if len(keys) < 3:
             raise RuntimeError(
                 f"Only {len(keys)} scene group(s) found in {len(pairs)} pair(s) "
-                f"— need at least 3 (one per split: train/val/test), and "
+                f"- need at least 3 (one per split: train/val/test), and "
                 f"practically ~6+ for a usable train share, since val and test "
                 f"are each seeded with one scene first. Either the dataset is "
                 f"too small, or filenames don't follow "
@@ -541,7 +541,7 @@ class SARtoEODataset(Dataset):
                 f"[Split] WARNING above, if any). For a local sprint, use a "
                 f"subset with >=6 distinct scenes (config: subset_size, "
                 f"applied AFTER this split, so it cannot fix a too-small "
-                f"source dataset — see DATA_AUDIT.md §5)."
+                f"source dataset - see DATA_AUDIT.md sec 5)."
             )
 
         def _allocate(scene_keys: List[str]) -> Dict[str, List[Tuple[str, str]]]:
@@ -663,7 +663,7 @@ class SARtoEODataset(Dataset):
             # test will not be independent.
             print(f"[Split] WARNING: the val/test pool holds only {len(keys)} "
                   f"scene(s), so it cannot be halved cleanly. Falling back to a "
-                  f"patch-level split — val and test WILL overlap "
+                  f"patch-level split - val and test WILL overlap "
                   f"geographically, and validation scores will flatter the "
                   f"test result.")
             p = list(pairs)
@@ -771,7 +771,7 @@ def get_dataloaders(
         train_drop_last = len(train_ds) >= batch_size
         if not train_drop_last:
             print(f"[DataLoader] WARNING: train split has only {len(train_ds)} "
-                  f"pair(s) for batch_size={batch_size} — drop_last=True would "
+                  f"pair(s) for batch_size={batch_size} - drop_last=True would "
                   f"silently yield ZERO batches every epoch. Disabling "
                   f"drop_last instead (final batch will be smaller).")
         loaders["train"] = DataLoader(
