@@ -1,10 +1,12 @@
 # SAR → EO Image Translation
-**Sentinel-1 SAR (VV) → Sentinel-2 RGB — Personal Research Project**
+**Sentinel-1 SAR (VV) → Sentinel-2 RGB**
+
+Personal research project. Phase 1 is also submitted as a 7th-semester Minor Project.
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1-ee4c2c?logo=pytorch)](https://pytorch.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![HuggingFace](https://img.shields.io/badge/Demo-HuggingFace%20Spaces-yellow?logo=huggingface)](https://huggingface.co/spaces)
+[![Status](https://img.shields.io/badge/Phase%201-implementation%20complete-blue)](#verification)
 
 > Generate cloud-free Sentinel-2 optical imagery from Sentinel-1 SAR radar data using a conditional deep learning pipeline — no clouds, no waiting, any weather, any time.
 
@@ -22,25 +24,30 @@ This project learns to translate SAR → EO directly: given a Sentinel-1 patch, 
 
 ### Phase 1 — ResNet50-UNet + Multi-Scale GAN (Current)
 
+Encoder and decoder are paired by spatial resolution — every skip joins two
+stages of the same size.
+
 ```
-SAR [1, 256, 256]
-      ↓
-ResNet50 Encoder (pretrained ImageNet)
-  stem   → [64,  128, 128]   ┐
-  layer1 → [256,  64,  64]   │ CBAM attention
-  layer2 → [512,  32,  32]   │ on every skip
-  layer3 → [1024, 16,  16]   │
-  layer4 → [2048,  8,   8]   ┘
-      ↓
-Bilinear Upsample Decoder
-      ↓
-EO RGB [3, 256, 256]
+resolution   ENCODER (ResNet50, ImageNet)        DECODER (from scratch)
+  256 px     SAR in  [1,  256, 256] ───────────► d0 + out conv → [3, 256, 256]
+  128 px     stem    [64,  128, 128] ──────────► d1   [64,  128, 128]
+   64 px     layer1  [256,  64,  64] ──CBAM───► d2   [128,  64,  64]
+   32 px     layer2  [512,  32,  32] ──CBAM───► d3   [256,  32,  32]
+   16 px     layer3  [1024, 16,  16] ──CBAM───► d4   [512,  16,  16]
+    8 px     layer4  [2048,  8,   8] ──CBAM───► bottleneck (proj4)
 ```
 
-**Discriminator:** 3× PatchGAN at 256px / 128px / 64px simultaneously  
-**Loss stack:** L1 + Multi-scale GAN + FFT + VGG perceptual + MS-SSIM  
-**Training:** EMA · Cosine warmup · Differential LR · Gradient clipping  
-**Generator params:** 35.5M  |  **Discriminator params:** 8.3M
+The 256 px skip is the one worth pointing at. ResNet50's stem halves the input
+immediately, so **no encoder feature map exists at full resolution** — without
+that connection the final decoder stage has to invent fine detail instead of
+recovering it. It costs 9,568 parameters, 0.03% of the model. Set
+`model.full_res_skip: false` to ablate it.
+
+**Discriminator:** 3× PatchGAN judging at 256/128/64 px simultaneously — patch verdicts of 30×30, 14×14 and 6×6  
+**Loss stack:** L1 (×100) + multi-scale GAN (×1) + FFT (×10) + VGG (×10) + MS-SSIM (×5)  
+**Training:** EMA · cosine warmup · differential LR · gradient clipping · exact resume  
+**Generator:** 35,537,419 params — 23,501,760 pretrained encoder + 12,035,659 decoder  
+**Discriminator:** 8,299,971 params
 
 ### Phase 2 — Conditional Diffusion Model (Next)
 
@@ -99,33 +106,90 @@ per-patch split are not comparable to these and are not reported.*
 
 ---
 
+## Verification
+
+The pipeline was reviewed defect-by-defect before any training time was spent.
+**Seventeen defects were found and corrected.** Seven would each have
+invalidated the reported results, and none of them raised an error at the time —
+in every case the failure mode was plausible-looking output.
+
+| Defect | Effect if left in |
+|--------|-------------------|
+| Train and test shared geographic ground | Every metric inflated; the model scored on pixels it had memorised |
+| `init_weights()` re-randomised the ResNet50 encoder | `pretrained_encoder: true` silently did nothing; the lower encoder LR protected noise |
+| EMA copied parameters but not buffers | Validation, `best.pth` and inference all ran on construction-time BatchNorm statistics |
+| Nested archive layout matched only the first terrain | 4,000 of 16,000 pairs used, all agricultural — the exact cause of the earlier "cities rendered as farmland" failure |
+| No full-resolution skip in the decoder | Finest detail interpolated rather than recovered; soft output |
+| Resumed sessions replayed the previous session's augmentation | A 150-epoch run split three ways gave 50 distinct epochs repeated 3× |
+| `terrain` split returned the same images for val and test | Checkpoints selected on the test set; the reported score is what it was tuned against |
+
+Each fix is verified rather than asserted:
+
+- **Split integrity** — test scenes also present in training fell from 100% to 0%,
+  measured on the real 16,000-pair dataset; all pairs used exactly once.
+- **Pretrained encoder** — `init_weights()` now alters encoder weights by
+  `0.000e+00`, and they match torchvision `IMAGENET1K_V1` exactly afterwards.
+- **Resume** — a run split 2+2 reproduces a continuous 4-epoch run with a maximum
+  weight difference of `0.000e+00` across all 359 floating-point tensors.
+- **Strided inference** — with an identity model, tiling and blending reconstruct
+  the input to `2.4e-07` across eight image sizes; zero seam artefacts.
+- **Augmentation** — SAR and EO stay aligned across all 16 flip/rotation
+  combinations; SAR noise does not move geometry; EO brightness does not touch SAR.
+
+Reproduce the split audit yourself:
+
+```bash
+python data/dataloader.py config.yaml
+```
+
+---
+
 ## Repository Structure
 
 ```
 sar2eo/
 ├── models/
-│   ├── generator.py        ResNet50-UNet + CBAM generator
-│   ├── discriminator.py    Multi-scale (3×) PatchGAN
-│   ├── losses.py           L1 · GAN · FFT · VGG · MS-SSIM
-│   ├── attention.py        CBAM module
-│   └── diffusion/
-│       ├── unet.py         Conditional denoising U-Net (40M)
-│       └── ddpm.py         DDPM + DDIM scheduler
+│   ├── generator.py           ResNet50-UNet + CBAM generator
+│   ├── discriminator.py       Multi-scale (3×) PatchGAN
+│   ├── losses.py              L1 · GAN · FFT · VGG · MS-SSIM
+│   ├── attention.py           CBAM module
+│   ├── diffusion/
+│   │   ├── unet.py            Conditional denoising U-Net (40.4M)
+│   │   └── ddpm.py            DDPM + DDIM sampler
+│   └── controlnet/
+│       └── controlnet.py      ControlNet adapter (Phase 3, scaffold)
 ├── data/
-│   └── dataloader.py       Combined SEN1-2 + Kaggle dataset loader
+│   └── dataloader.py          Dataset · scene-disjoint split · leakage audit
 ├── utils/
-│   ├── metrics.py          LPIPS · FID · SSIM · PSNR
-│   ├── visualize.py        Loss curves · triplet grids
-│   └── ema.py              Exponential Moving Average
+│   ├── metrics.py             LPIPS · FID · SSIM · PSNR
+│   ├── visualize.py           Loss curves · triplet grids
+│   └── ema.py                 Exponential moving average
 ├── demo/
-│   └── app.py              Gradio demo (HuggingFace Spaces)
-├── train.py                GAN training (Phase 1)
-├── train_diffusion.py      Diffusion training (Phase 2)
-├── eval.py                 Evaluation script
-├── infer.py                Inference (+ TTA option)
-├── kaggle_train.py         Single-cell Kaggle notebook script
-├── config.yaml             All hyperparameters
-└── requirements.txt
+│   └── app.py                 Gradio demo (HuggingFace Spaces)
+│
+│   Phase 1
+├── train.py                   Training loop · checkpointing · exact resume
+├── run_ablations.py           4-config ablation study + comparison table
+├── eval.py                    Evaluation on the held-out test split
+├── eval_per_terrain.py        Per-terrain metric breakdown
+├── infer.py                   Inference — batch · TTA · strided full-scene
+├── plot_results.py            Loss curves and results figures
+├── export_onnx.py             ONNX export (+ optional quantisation)
+├── deploy_to_hf.py            HuggingFace Space deployment
+│
+│   Notebooks
+├── local_train.ipynb          Local / lab GPU — 30 cells, step by step
+├── kaggle_phase1_train.ipynb  Kaggle, with 12-hour session handling
+├── kaggle_train.py            Kaggle single-cell variant
+│
+│   Phase 2 / 3
+├── train_diffusion.py         Conditional DDPM
+├── train_diffusion_ldm.py     Latent-diffusion variant
+├── train_controlnet.py        ControlNet training (scaffold)
+├── kaggle_train_diffusion.py  Kaggle diffusion runner
+│
+├── config.yaml                All hyperparameters, documented inline
+└── requirements.txt           Pinned
 ```
 
 ---

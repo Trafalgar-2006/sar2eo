@@ -23,3 +23,8 @@ gradio>=4.40.0
 
 # Development
 pytest>=7.0.0
+
+# ONNX export (export_onnx.py only). Imported lazily, so the rest of the
+# project runs without these installed.
+onnx>=1.15.0
+onnxruntime>=1.17.0
